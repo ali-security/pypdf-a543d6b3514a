@@ -654,6 +654,58 @@ def test_remove_child_in_tree():
     tree.empty_tree()
 
 
+@pytest.mark.timeout(10)
+def test_tree_object__cyclic_reference(caplog):
+    writer = PdfWriter()
+    child1 = writer._add_object(DictionaryObject())
+    child2 = writer._add_object(DictionaryObject({NameObject("/Next"): child1}))
+    child3 = writer._add_object(DictionaryObject({NameObject("/Next"): child2}))
+    child1.get_object()[NameObject("/Next")] = child3
+    tree = TreeObject()
+    tree[NameObject("/First")] = child2
+    tree[NameObject("/Last")] = writer._add_object(DictionaryObject())
+
+    assert list(tree.children()) == [child2.get_object(), child1.get_object(), child3.get_object()]
+    assert "Detected cycle in outline structure for " in caplog.text
+
+
+@pytest.mark.timeout(10)
+def test_tree_object__cyclic_reference_from_file(caplog):
+    writer = PdfWriter()
+    writer.add_blank_page(100, 100)
+    child1 = writer._add_object(
+        DictionaryObject({NameObject("/Title"): TextStringObject("first")})
+    )
+    child2 = writer._add_object(
+        DictionaryObject(
+            {
+                NameObject("/Title"): TextStringObject("second"),
+                NameObject("/Next"): child1,
+            }
+        )
+    )
+    child1.get_object()[NameObject("/Next")] = child2
+    last = writer._add_object(
+        DictionaryObject({NameObject("/Title"): TextStringObject("last")})
+    )
+    writer._root_object[NameObject("/Outlines")] = writer._add_object(
+        DictionaryObject(
+            {
+                NameObject("/Type"): NameObject("/Outlines"),
+                NameObject("/First"): child1,
+                NameObject("/Last"): last,
+            }
+        )
+    )
+    stream = BytesIO()
+    writer.write(stream)
+
+    reader = PdfReader(stream)
+    tree = TreeObject(reader.root_object["/Outlines"])
+    assert [child["/Title"] for child in tree] == ["first", "second"]
+    assert "Detected cycle in outline structure for " in caplog.text
+
+
 @pytest.mark.enable_socket
 @pytest.mark.parametrize(
     ("url", "name", "caplog_content"),
