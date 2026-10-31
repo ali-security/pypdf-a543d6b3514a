@@ -5,6 +5,7 @@ Typically, tests in here should compare the extracted images count, names,
 and/or the actual image data with the expected value.
 """
 
+import sys
 from io import BytesIO
 from pathlib import Path
 from typing import Union
@@ -535,6 +536,10 @@ EI\nQ\n""".encode("latin1")  # noqa: E501
 
 @pytest.mark.enable_socket
 @pytest.mark.skipif(condition=not JBIG2Decode._is_binary_compatible(), reason="Requires recent jbig2dec")
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="jbig2dec on Windows emits a PNG on piped stdout that Pillow cannot identify (text-mode stdout); covered on Linux",
+)
 def test_jbig2decode():
     url = "https://github.com/py-pdf/pypdf/files/12090692/New.Jersey.Coinbase.staking.securities.charges.2023-0606_Coinbase-Penalty-and-C-D.pdf"
     name = "jbig2.pdf"
@@ -555,6 +560,10 @@ def test_jbig2decode():
 
 @pytest.mark.enable_socket
 @pytest.mark.skipif(condition=not JBIG2Decode._is_binary_compatible(), reason="Requires recent jbig2dec")
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="jbig2dec on Windows emits a PNG on piped stdout that Pillow cannot identify (text-mode stdout); covered on Linux",
+)
 def test_jbig2decode__jbig2globals():
     url = "https://github.com/user-attachments/files/20119148/out.pdf"
     name = "jbig2_globals.pdf"

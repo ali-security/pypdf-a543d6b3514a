@@ -766,9 +766,10 @@ def test_image_extraction2(url, name):
             "https://github.com/user-attachments/files/18381692/tika-918137.pdf",
             "tika-918137.pdf",
         ),
-        (
+        pytest.param(
             "https://unglueit-files.s3.amazonaws.com/ebf/7552c42e9280b4476e59e77acc0bc812.pdf",
             "7552c42e9280b4476e59e77acc0bc812.pdf",
+            marks=pytest.mark.skip(reason="external URL now returns HTTP 403"),
         ),
     ],
 )

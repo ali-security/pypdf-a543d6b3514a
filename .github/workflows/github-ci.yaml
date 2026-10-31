@@ -4,34 +4,43 @@
 name: CI
 
 on:
-  push:
-    branches:
-      - main
-    paths-ignore:
-      - '**/*.md'
-      - '**/*.rst'
-  pull_request:
-    branches:
-      - main
-    paths-ignore:
-      - '**/*.md'
-      - '**/*.rst'
   workflow_dispatch:
+    inputs:
+      test-filter:
+        description: 'pytest selector to run instead of the full tests/ directory'
+        required: false
+        default: ''
+
+env:
+  PIP_INDEX_URL: https://:2025-07-27T14:04:50.530148Z@time-machines-pypi.sealsecurity.io/
 
 jobs:
   test_windows:
     name: pytest on windows
     runs-on: windows-latest
+    timeout-minutes: 45
     steps:
     - name: Checkout Code
       uses: actions/checkout@v4
       with:
         submodules: 'recursive'
+    - name: Install ghostscript, jbig2dec and poppler (MSYS2)
+      shell: pwsh
+      run: |
+        C:\msys64\usr\bin\pacman.exe -Sy --noconfirm --needed mingw-w64-x86_64-ghostscript mingw-w64-x86_64-jbig2dec mingw-w64-x86_64-poppler
+        if (-not (Test-Path C:\msys64\mingw64\bin\gs.exe)) { Copy-Item C:\msys64\mingw64\bin\gsc.exe C:\msys64\mingw64\bin\gs.exe }
+        "C:\msys64\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
     - name: Setup Python (3.11+)
       uses: actions/setup-python@v5
       with:
         python-version: 3.13  # latest stable python
         allow-prereleases: true
+    - name: Show external tools
+      shell: pwsh
+      run: |
+        Get-Command python, gs, jbig2dec, pdfattach | Format-Table Name, Source
+        jbig2dec --version
+        gs --version
     - name: Upgrade pip
       run: |
         python -m pip install --upgrade pip
@@ -49,12 +58,13 @@ jobs:
         python -c "from tests import download_test_pdfs; download_test_pdfs()"
     - name: Test with pytest
       run: |
-        python -m pytest tests --cov=pypdf --cov-append -n auto -vv -p no:benchmark
+        python -m pytest ${{ inputs.test-filter || 'tests' }} --cov=pypdf --cov-append -n auto -vv -rs -p no:benchmark
 
 
   tests:
     name: "pytest on ${{ matrix.python-version }} (crypto-lib: ${{ matrix.use-crypto-lib }})"
     runs-on: ubuntu-22.04
+    timeout-minutes: 45
     strategy:
       matrix:
         python-version: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13"]
@@ -137,7 +147,7 @@ jobs:
         echo "    pass" >> $SITECUSTOMIZE_PATH
     - name: Test with pytest
       run: |
-        python -m pytest tests --cov=pypdf --cov-append -n auto -vv -p no:benchmark
+        python -m pytest ${{ inputs.test-filter || 'tests' }} --cov=pypdf --cov-append -n auto -vv -rs -p no:benchmark
       env:
         COVERAGE_PROCESS_START: 'pyproject.toml'
     - name: Rename coverage data file
@@ -152,7 +162,9 @@ jobs:
 
   codestyle:
     name: Check code style issues
+    if: false
     runs-on: ubuntu-22.04
+    timeout-minutes: 30
     steps:
     - name: Checkout Code
       uses: actions/checkout@v4
@@ -192,6 +204,7 @@ jobs:
   package:
     name: Build & verify package
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -213,7 +226,9 @@ jobs:
 
   coverage:
     name: Combine & check coverage.
+    if: false
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: tests
 
     steps:

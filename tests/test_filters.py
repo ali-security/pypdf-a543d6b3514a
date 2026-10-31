@@ -3,6 +3,7 @@ import os
 import shutil
 import string
 import subprocess
+import sys
 from io import BytesIO
 from itertools import product as cartesian_product
 from pathlib import Path
@@ -732,6 +733,10 @@ def test_jbig2decode__binary_errors():
 
 
 @pytest.mark.skipif(condition=not JBIG2Decode._is_binary_compatible(), reason="Requires recent jbig2dec")
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="jbig2dec on Windows emits a PNG on piped stdout that Pillow cannot identify (text-mode stdout); covered on Linux",
+)
 def test_jbig2decode__edge_cases(caplog):
     image_data = (
         b'\x00\x00\x00\x010\x00\x01\x00\x00\x00\x13\x00\x00\x00\x05\x00\x00\x00\x05\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x06"'
