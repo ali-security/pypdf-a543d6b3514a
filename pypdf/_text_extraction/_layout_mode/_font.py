@@ -3,7 +3,11 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, Sequence, Union
 
-from ..._cmap import _check_cid_width_range_length, _check_width_entry_count
+from ..._cmap import (
+    MAX_SIMPLE_FONT_WIDTH_ENTRY_COUNT,
+    _check_cid_width_range_length,
+    _check_width_entry_count,
+)
 from ..._codecs import adobe_glyphs
 from ...errors import ParseError
 from ...generic import IndirectObject
@@ -52,6 +56,9 @@ class Font:
 
         # TrueType fonts have a /Widths array mapping character codes to widths
         if isinstance(self.encoding, dict) and "/Widths" in self.font_dictionary:
+            _check_width_entry_count(
+                len(self.font_dictionary["/Widths"]), MAX_SIMPLE_FONT_WIDTH_ENTRY_COUNT
+            )
             first_char = self.font_dictionary.get("/FirstChar", 0)
             self.width_map = {
                 self.encoding.get(idx + first_char, chr(idx + first_char)): width

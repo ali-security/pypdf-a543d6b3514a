@@ -705,3 +705,86 @@ def test_extract_text__cid_width_range_limit():
             expected_exception=LimitReachedError, match=r"^CID width range too large: 1114112 > 65536\.$"
     ):
         page.extract_text()
+
+
+def _simple_font_with_widths(widths, first_char=0, last_char=None):
+    if last_char is None:
+        last_char = first_char + len(widths) - 1
+    return DictionaryObject({
+        NameObject("/Type"): NameObject("/Font"),
+        NameObject("/Subtype"): NameObject("/TrueType"),
+        NameObject("/BaseFont"): NameObject("/Dummy"),
+        NameObject("/Encoding"): NameObject("/WinAnsiEncoding"),
+        NameObject("/FirstChar"): NumberObject(first_char),
+        NameObject("/LastChar"): NumberObject(last_char),
+        NameObject("/Widths"): ArrayObject(widths),
+    })
+
+
+@pytest.mark.timeout(30)
+def test_build_font_width_map__simple_font_width_limits():
+    font = _simple_font_with_widths([NumberObject(42)] * 256)
+    width_map = build_font_width_map(font, 0.0)
+    assert len(width_map) == 256 + 1
+    assert width_map[chr(0)] == 42
+    assert width_map[chr(255)] == 42
+    assert width_map["default"] == 42
+
+    font = _simple_font_with_widths([NumberObject(42)] * 257)
+    with pytest.raises(
+            expected_exception=LimitReachedError, match=r"^Too many character widths: 257 > 256\.$"
+    ):
+        build_font_width_map(font, 0.0)
+
+    font = _simple_font_with_widths([NumberObject(42)] * 100_001, last_char=255)
+    with pytest.raises(
+            expected_exception=LimitReachedError, match=r"^Too many character widths: 100001 > 256\.$"
+    ):
+        build_font_width_map(font, 0.0)
+
+
+@pytest.mark.timeout(30)
+def test_build_font_width_map__simple_font_last_char():
+    # /LastChar far beyond the end of /Widths must not drive the processing.
+    font = _simple_font_with_widths(
+        [NumberObject(500), NumberObject(600)], first_char=0, last_char=2_000_000_000
+    )
+    assert build_font_width_map(font, 0.0) == {
+        "\x00": 500,
+        "\x01": 600,
+        "default": 550.0,
+    }
+
+    # /LastChar before the end of /Widths still limits the mapped characters.
+    font = _simple_font_with_widths(
+        [NumberObject(500), NumberObject(600), NumberObject(700)], first_char=32, last_char=33
+    )
+    assert build_font_width_map(font, 0.0) == {
+        " ": 500,
+        "!": 600,
+        "default": 600.0,
+    }
+
+    # Without any widths, nothing gets mapped.
+    font = _simple_font_with_widths([], first_char=0, last_char=2_000_000_000)
+    assert build_font_width_map(font, 0.0) == {"default": 0.0}
+
+
+@pytest.mark.timeout(30)
+def test_extract_text__simple_font_width_limit():
+    writer = PdfWriter()
+    font = writer._add_object(_simple_font_with_widths(
+        [NumberObject(500)] * 1_000_000, first_char=0, last_char=255
+    ))
+
+    page = writer.add_blank_page(width=100, height=100)
+    page[NameObject("/Resources")] = DictionaryObject({
+        NameObject("/Font"): DictionaryObject({
+            NameObject("/F1"): font.indirect_reference,
+        })
+    })
+
+    with pytest.raises(
+            expected_exception=LimitReachedError, match=r"^Too many character widths: 1000000 > 256\.$"
+    ):
+        page.extract_text()

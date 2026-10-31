@@ -332,6 +332,8 @@ MAX_CMAP_STRING_BYTES_LIMIT = MAX_CMAP_STRING_BYTES * 2
 # Limits for the /W array of CID fonts.
 MAX_CID_WIDTH_ENTRY_COUNT = 65_536
 MAX_WIDTH_ENTRY_COUNT = 100_000
+# For a simple font, character codes are one-byte values, 0-255, so /Widths can have at most 256 meaningful entries.
+MAX_SIMPLE_FONT_WIDTH_ENTRY_COUNT = 256
 
 
 def _check_mapping_size(size: int) -> None:
@@ -363,9 +365,9 @@ def _check_cid_width_range_length(start: int, end: int) -> None:
         raise LimitReachedError(f"CID width range too large: {count} > {MAX_CID_WIDTH_ENTRY_COUNT}.")
 
 
-def _check_width_entry_count(count: int) -> None:
-    if count > MAX_WIDTH_ENTRY_COUNT:
-        raise LimitReachedError(f"Too many character widths: {count} > {MAX_WIDTH_ENTRY_COUNT}.")
+def _check_width_entry_count(count: int, limit: int = MAX_WIDTH_ENTRY_COUNT) -> None:
+    if count > limit:
+        raise LimitReachedError(f"Too many character widths: {count} > {limit}.")
 
 
 def __parse_bfrange__decode(map_dict: Dict[Any, Any], fmt: bytes, code: int) -> str:
@@ -543,6 +545,7 @@ def build_font_width_map(
                 break
     elif "/Widths" in ft:
         w = cast(ArrayObject, ft["/Widths"].get_object())
+        _check_width_entry_count(len(w), MAX_SIMPLE_FONT_WIDTH_ENTRY_COUNT)
         if "/FontDescriptor" in ft and "/MissingWidth" in cast(
             DictionaryObject, ft["/FontDescriptor"]
         ):
@@ -559,6 +562,9 @@ def build_font_width_map(
             font_width_map["default"] = m / max(1, cpt)
         st = cast(int, ft["/FirstChar"])
         en = cast(int, ft["/LastChar"])
+        # Character codes beyond the end of the /Widths array have no width
+        # entry, so do not let /LastChar drive the loop past it.
+        en = min(en, st + len(w) - 1)
         for c_code in range(st, en + 1):
             try:
                 width = w[c_code - st].get_object()

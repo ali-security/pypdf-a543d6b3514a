@@ -866,6 +866,69 @@ def test_layout_mode__cid_width_range_limit():
         page.extract_text(extraction_mode="layout")
 
 
+def _layout_mode_simple_font(widths, first_char=0, encoding=None):
+    return _layout_mode.Font(
+        "/TrueType",
+        space_width=200,
+        encoding=encoding or {},
+        char_map={},
+        font_dictionary={
+            "/FirstChar": first_char,
+            "/Widths": ArrayObject(widths),
+        },
+    )
+
+
+@pytest.mark.timeout(30)
+def test_layout_mode_font__simple_font_width_limits():
+    font = _layout_mode_simple_font([NumberObject(42)] * 256)
+    assert len(font.width_map) == 256
+    assert font.width_map[chr(0)] == 42
+    assert font.width_map[chr(255)] == 42
+
+    font = _layout_mode_simple_font(
+        [NumberObject(500), NumberObject(600)], first_char=65, encoding={65: "x"}
+    )
+    assert font.width_map == {"x": 500, "B": 600}
+
+    with pytest.raises(
+            expected_exception=LimitReachedError, match=r"^Too many character widths: 257 > 256\.$"
+    ):
+        _layout_mode_simple_font([NumberObject(42)] * 257)
+
+    with pytest.raises(
+            expected_exception=LimitReachedError, match=r"^Too many character widths: 100001 > 256\.$"
+    ):
+        _layout_mode_simple_font([NumberObject(42)] * 100_001)
+
+
+@pytest.mark.timeout(30)
+def test_layout_mode__simple_font_width_limit():
+    writer = PdfWriter()
+    font = writer._add_object(DictionaryObject({
+        NameObject("/Type"): NameObject("/Font"),
+        NameObject("/Subtype"): NameObject("/TrueType"),
+        NameObject("/BaseFont"): NameObject("/Dummy"),
+        NameObject("/Encoding"): NameObject("/WinAnsiEncoding"),
+        NameObject("/FirstChar"): NumberObject(0),
+        NameObject("/LastChar"): NumberObject(255),
+        NameObject("/Widths"): ArrayObject([NumberObject(500)] * 1_000_000),
+    }))
+
+    page = writer.add_blank_page(width=100, height=100)
+    page[NameObject("/Resources")] = DictionaryObject({
+        NameObject("/Font"): DictionaryObject({
+            NameObject("/F1"): font.indirect_reference,
+        })
+    })
+    page.pdf = writer
+
+    with pytest.raises(
+            expected_exception=LimitReachedError, match=r"^Too many character widths: 1000000 > 256\.$"
+    ):
+        page.extract_text(extraction_mode="layout")
+
+
 def _generate_dag_with_forms(depth: int) -> bytes:
     writer = PdfWriter()
     page = writer.add_blank_page(width=612, height=792)
