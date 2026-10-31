@@ -44,6 +44,8 @@ RESOURCE_ROOT = PROJECT_ROOT / "resources"
         (8, "VIII"),
         (9, "IX"),
         (10, "X"),
+        (3_888, "MMMDCCCLXXXVIII"),
+        (3_999, "MMMCMXCIX"),
     ],
 )
 def test_number2uppercase_roman_numeral(number, expected):
@@ -181,6 +183,22 @@ def test_get_label_from_nums__empty_nums_list():
     assert get_label_from_nums(dictionary_object, 13) == "14"
 
 
+def test_get_label_from_nums__malformed_start(caplog):
+    value = DictionaryObject({
+        NameObject("/S"): NameObject("/D"),
+        NameObject("/St"): NameObject("/bad"),
+    })
+    dictionary_object = DictionaryObject()
+    dictionary_object[NameObject("/Nums")] = ArrayObject([NumberObject(0), value])
+    assert get_label_from_nums(dictionary_object, 3) == "4"
+    assert caplog.messages == [
+        (
+            "Ignoring malformed page label entry in /Nums (/St='/bad', /P=''): "
+            "unsupported operand type(s) for +: 'int' and 'NameObject'"
+        )
+    ]
+
+
 def test_index2label__empty_kids_list():
     reader = PdfReader(RESOURCE_ROOT / "crazyones.pdf")
     number_tree = DictionaryObject()
@@ -189,3 +207,84 @@ def test_index2label__empty_kids_list():
     root[NameObject("/PageLabels")] = number_tree
 
     assert index2label(reader, 42) == "43"
+
+
+def test_get_label_from_nums__roman__limits(caplog):
+    with pytest.raises(expected_exception=ValueError, match=r"^Number is out of range\.$"):
+        number2uppercase_roman_numeral(4321)
+    assert caplog.messages == []
+
+    labels_large = DictionaryObject({
+        NameObject("/Nums"): ArrayObject([
+            NumberObject(0),
+            DictionaryObject({
+                NameObject("/S"): NameObject("/R"),
+                NameObject("/St"): NumberObject(5000)
+            })
+        ])
+    })
+    assert get_label_from_nums(labels_large, 0) == "1"
+    assert caplog.messages == [
+        "Ignoring malformed page label entry in /Nums (/St=5000, /P=''): Number is out of range."
+    ]
+
+    labels_negative = DictionaryObject({
+        NameObject("/Nums"): ArrayObject([
+            NumberObject(-10_000),
+            DictionaryObject({
+                NameObject("/S"): NameObject("/R"),
+            })
+        ])
+    })
+    caplog.clear()
+    assert get_label_from_nums(labels_negative, 0) == "1"
+    assert caplog.messages == [
+        "Ignoring malformed page label entry in /Nums (/St=1, /P=''): Number is out of range."
+    ]
+
+
+@pytest.mark.parametrize("number", [0, -1, -1_000])
+def test_number2uppercase_roman_numeral__not_positive(number):
+    with pytest.raises(expected_exception=ValueError, match=r"^Expecting a positive number\.$"):
+        number2uppercase_roman_numeral(number)
+    with pytest.raises(expected_exception=ValueError, match=r"^Expecting a positive number\.$"):
+        number2lowercase_roman_numeral(number)
+
+
+@pytest.mark.timeout(10)
+@pytest.mark.parametrize("style", ["/R", "/r"])
+@pytest.mark.parametrize("use_kids", [False, True])
+def test_index2label__roman__huge_start(caplog, style, use_kids):
+    # A huge /St value must not make pypdf build a gigantic roman numeral string.
+    huge_start = 10**15
+    nums = ArrayObject([
+        NumberObject(0),
+        DictionaryObject({
+            NameObject("/S"): NameObject(style),
+            NameObject("/St"): NumberObject(huge_start),
+        }),
+    ])
+    if use_kids:
+        number_tree = DictionaryObject({
+            NameObject("/Kids"): ArrayObject([
+                DictionaryObject({
+                    NameObject("/Limits"): ArrayObject([NumberObject(0), NumberObject(10)]),
+                    NameObject("/Nums"): nums,
+                })
+            ])
+        })
+    else:
+        number_tree = DictionaryObject({NameObject("/Nums"): nums})
+
+    reader = PdfReader(RESOURCE_ROOT / "crazyones.pdf")
+    reader.root_object[NameObject("/PageLabels")] = number_tree
+    caplog.clear()
+
+    assert index2label(reader, 0) == "1"
+    assert index2label(reader, 3) == "4"
+    assert caplog.messages == [
+        (
+            "Ignoring malformed page label entry in /Nums "
+            f"(/St={huge_start}, /P=''): Number is out of range."
+        ),
+    ] * 2
