@@ -160,7 +160,7 @@ WHITESPACES_AS_BYTES = b"".join(WHITESPACES)
 WHITESPACES_AS_REGEXP = b"[" + WHITESPACES_AS_BYTES + b"]"
 
 
-def read_until_whitespace(stream: StreamType, maxchars: Optional[int] = None) -> bytes:
+def read_until_whitespace(stream: StreamType, maxchars: Optional[int] = None, strict: bool = False) -> bytes:
     """
     Read non-whitespace characters and return them.
 
@@ -168,7 +168,10 @@ def read_until_whitespace(stream: StreamType, maxchars: Optional[int] = None) ->
 
     Args:
         stream: The data stream from which was read.
-        maxchars: The maximum number of bytes returned; by default unlimited.
+        maxchars: The maximum number of bytes which are considered valid. One more byte
+            will always be read from the stream.
+        strict: Whether to raise an exception if the token exceeds maxchars.
+            If False, a warning is logged and only the first maxchars are returned.
 
     Returns:
         The data which was read.
@@ -177,11 +180,14 @@ def read_until_whitespace(stream: StreamType, maxchars: Optional[int] = None) ->
     txt = bytearray()
     while True:
         tok = stream.read(1)
-        if tok.isspace() or not tok:
+        if tok.isspace() or tok in WHITESPACES or not tok:
+            break
+        if maxchars is not None and len(txt) >= maxchars:
+            if strict:
+                raise LimitReachedError(f"Token exceeds maximum length of {maxchars} bytes.")
+            logger_warning(f"Token exceeds maximum length of {maxchars} bytes.", __name__)
             break
         txt += tok
-        if len(txt) == maxchars:
-            break
     return bytes(txt)
 
 

@@ -2,6 +2,7 @@
 
 import codecs
 import os
+import re
 import subprocess
 import sys
 from base64 import a85encode
@@ -15,7 +16,7 @@ import pytest
 
 from pypdf import PdfReader, PdfWriter
 from pypdf.constants import CheckboxRadioButtonAttributes
-from pypdf.errors import LimitReachedError, PdfReadError, PdfStreamError
+from pypdf.errors import STREAM_TRUNCATED_PREMATURELY, LimitReachedError, PdfReadError, PdfStreamError
 from pypdf.generic import (
     ArrayObject,
     BooleanObject,
@@ -151,9 +152,8 @@ def test_null_object_exception():
 @pytest.mark.parametrize("value", [b"", b"False", b"foo ", b"foo  ", b"foo bar"])
 def test_indirect_object_premature(value):
     stream = BytesIO(value)
-    with pytest.raises(PdfStreamError) as exc:
+    with pytest.raises(expected_exception=PdfStreamError, match=re.escape(STREAM_TRUNCATED_PREMATURELY)):
         IndirectObject.read_from_stream(stream, None)
-    assert exc.value.args[0] == "Stream has ended unexpectedly"
 
 
 def test_read_hex_string_from_stream():
