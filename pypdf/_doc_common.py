@@ -47,7 +47,7 @@ from typing import (
 
 from ._encryption import Encryption
 from ._page import PageObject, _VirtualList
-from ._page_labels import index2label as page_index2page_label
+from ._page_labels import index2labels
 from ._utils import (
     _TraversalState,
     deprecate_no_replacement,
@@ -1151,7 +1151,7 @@ class PdfDocCommon:
         This property is read-only. The labels are in the order that the pages
         appear in the document.
         """
-        return [page_index2page_label(self, i) for i in range(len(self.pages))]
+        return index2labels(self, len(self.pages))
 
     @property
     def page_layout(self) -> Optional[str]:

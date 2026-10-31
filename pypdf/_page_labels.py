@@ -65,6 +65,7 @@ from ._utils import logger_warning
 from .generic import (
     ArrayObject,
     DictionaryObject,
+    NameObject,
     NullObject,
     NumberObject,
     is_null_or_none,
@@ -222,6 +223,61 @@ def index2label(reader: PdfCommonDocProtocol, index: int) -> str:
 
     logger_warning(f"Could not reliably determine page label for {index}.", __name__)
     return str(index + 1)  # Fallback if neither /Nums nor /Kids is in the number_tree
+
+
+def _index2labels_page_by_page(pdf: PdfCommonDocProtocol, page_count: int) -> List[str]:
+    return [index2label(pdf, index) for index in range(page_count)]
+
+
+def index2labels(pdf: PdfCommonDocProtocol, page_count: int) -> List[str]:
+    """
+    Labels of the first ``page_count`` pages, as ``index2label`` would return them.
+
+    A flat ``/Nums`` array is walked once for all pages instead of from the
+    start for every page. Any other number tree is resolved page by page.
+
+    Args:
+        pdf: The PdfReader or PdfWriter
+        page_count: The number of pages to label
+
+    Returns:
+        The labels of the pages, in page order.
+
+    """
+    if page_count <= 0:
+        return []
+    root = cast(DictionaryObject, pdf.root_object)
+    if "/PageLabels" not in root:
+        return _index2labels_page_by_page(pdf, page_count)
+    number_tree = root["/PageLabels"].get_object()
+    if not isinstance(number_tree, DictionaryObject) or "/Nums" not in number_tree:
+        return _index2labels_page_by_page(pdf, page_count)
+    nums = number_tree["/Nums"]
+    if not isinstance(nums, ArrayObject):
+        return _index2labels_page_by_page(pdf, page_count)
+
+    # ``get_label_from_nums`` always reads the first pair, then moves on to the
+    # next pair as long as its key is not above the page index. A key which is
+    # not above a page index is not above any later page index either, so the
+    # pair reached for a page is never before the one reached for the previous
+    # page: resume the walk there instead of rescanning ``/Nums`` from the start
+    # for every page. This does not depend on the order of the keys or on the
+    # kind of values, so crafted arrays (unsorted or repeated keys, indirect
+    # values) cannot bring the repeated scan back.
+    labels: List[str] = []
+    nums_length = len(nums)
+    position = 0
+    for index in range(page_count):
+        while position + 2 < nums_length:
+            # Resolve the value before looking at the next key, in the same
+            # order as ``get_label_from_nums``.
+            nums[position + 1].get_object()
+            if nums[position + 2] > index:
+                break
+            position += 2
+        entry = DictionaryObject({NameObject("/Nums"): ArrayObject(nums[position : position + 2])})
+        labels.append(get_label_from_nums(entry, index))
+    return labels
 
 
 def nums_insert(
