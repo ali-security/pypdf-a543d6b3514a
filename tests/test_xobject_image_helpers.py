@@ -5,8 +5,9 @@ from pathlib import Path
 import pytest
 
 from pypdf import PdfReader
-from pypdf._xobj_image_helpers import _extended_image_frombytes, _handle_flate
-from pypdf.errors import EmptyImageDataError, PdfReadError
+from pypdf._xobj_image_helpers import _extended_image_frombytes, _handle_flate, bits2byte
+from pypdf.errors import EmptyImageDataError, LimitReachedError, PdfReadError
+from pypdf.filters import _xobj_to_image
 from pypdf.generic import ArrayObject, DecodedStreamObject, NameObject, NumberObject
 
 from . import get_data_from_url
@@ -160,3 +161,30 @@ def test_get_mode_and_invert_color():
     page = reader.pages[12]
     for _name, image in page.images.items():  # noqa: PERF102
         image.image.load()
+
+
+def test_bits2byte__limit() -> None:
+    with pytest.raises(
+            expected_exception=LimitReachedError,
+            match=r"^Requested buffer size 76500000 exceeds limit of 75000000\.$"
+    ):
+        bits2byte(data=b"TEST", size=(9000, 8500), bits=8)
+
+
+def test_xobj_to_image__flate_image_size_limit() -> None:
+    """Huge declared dimensions of a FlateDecode image must not allocate an unbounded buffer."""
+    image = DecodedStreamObject()
+    image.set_data(b"TEST")
+    image[NameObject("/Type")] = NameObject("/XObject")
+    image[NameObject("/Subtype")] = NameObject("/Image")
+    image[NameObject("/Filter")] = NameObject("/FlateDecode")
+    image[NameObject("/ColorSpace")] = NameObject("/DeviceGray")
+    image[NameObject("/BitsPerComponent")] = NumberObject(4)
+    image[NameObject("/Width")] = NumberObject(9000)
+    image[NameObject("/Height")] = NumberObject(8500)
+
+    with pytest.raises(
+            expected_exception=LimitReachedError,
+            match=r"^Requested buffer size 76500000 exceeds limit of 75000000\.$"
+    ):
+        _xobj_to_image(image)
