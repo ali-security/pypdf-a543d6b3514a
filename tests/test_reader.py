@@ -2327,3 +2327,13 @@ def test_rebuild_xref_table__object_stream__long_offset():
         match=rf"Token exceeds maximum length of {IndirectObject._MAXIMUM_PART_LENGTH} bytes",
     ):
         reader._rebuild_xref_table(BytesIO(pdf))
+
+
+@pytest.mark.timeout(5)
+def test_read_standard_xref_table__end_of_file():
+    body = b"%PDF-1.0\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[]/Count 0>>endobj\n"
+    tail = b"\nstartxref\n%d\n%%%%EOF" % len(body)  # 19 bytes, starts with LF
+    data = body + b"xref\n0 3\n0000000000 65535 f \n" + tail
+
+    with pytest.raises(expected_exception=PdfReadError, match=r"^Unexpected EOF in Xref table\.$"):
+        PdfReader(BytesIO(data))
