@@ -1648,6 +1648,8 @@ class PageObject(DictionaryObject):
                         "/Encoding"
                     ].__repr__()
                     out += enc_repr + "\n"
+                except MemoryError:  # pragma: no cover  # TODO: BLE001
+                    raise
                 except Exception:
                     pass
                 try:
@@ -1659,6 +1661,8 @@ class PageObject(DictionaryObject):
                         .decode()
                         + "\n"
                     )
+                except MemoryError:  # pragma: no cover  # TODO: BLE001
+                    raise
                 except Exception:
                     pass
 
@@ -1805,6 +1809,8 @@ class PageObject(DictionaryObject):
                                 extractor.cmap[3],
                                 extractor.font_size,
                             )
+                except MemoryError:  # pragma: no cover  # TODO: BLE001
+                    raise
                 except Exception as exception:
                     logger_warning(
                         f"Impossible to decode XFormObject {operands[0]}: {exception}",
@@ -2307,6 +2313,8 @@ class _VirtualList(Sequence[PageObject]):
                 try:
                     assert ind is not None
                     del ind.pdf.flattened_pages[index]  # case of page in a Reader
+                except MemoryError:  # pragma: no cover  # TODO: BLE001
+                    raise
                 except Exception:  # pragma: no cover
                     pass
                 if "/Count" in parent:

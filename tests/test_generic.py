@@ -1952,3 +1952,60 @@ def test_content_stream__parse_content_stream__token_limit__reader() -> None:
     reader = PdfReader(buffer)
     with mock.patch("pypdf.generic._data_structures.STREAM_PARSING_WORK_MAX_COUNT", 300):
         assert reader.pages[0].get_contents().operations == [([0, 0], b"m")] * 100
+
+
+def test_dictionary_object__read_from_stream__error_handling() -> None:
+    header = b"%PDF-1.4\n"
+    obj1_offset = len(header)
+    nested = b"<< /A " * 18  # never closed
+    obj1 = b"1 0 obj\n" + nested + b"\nendobj\n"
+    body = header + obj1
+    xref_offset = len(body)
+    xref = (
+        b"xref\n0 2\n"
+        b"0000000000 65535 f \n"
+        + (b"%010d 00000 n \n" % obj1_offset)
+    )
+    trailer = (
+        b"trailer\n<< /Size 2 /Root 1 0 R >>\nstartxref\n"
+        + str(xref_offset).encode() + b"\n%%EOF"
+    )
+    data = body + xref + trailer
+
+    reader = PdfReader(BytesIO(data), strict=True)
+    with pytest.raises(expected_exception=PdfReadError, match=r"^Error reading PDF file\.$"):
+        _ = reader.trailer["/Root"]  # forces resolution of the broken dictionary
+
+
+@pytest.mark.parametrize("strict", [True, False])
+def test_dictionary_object__read_from_stream__error_text_is_bounded(strict, caplog) -> None:
+    # The text of a nested parsing error must not be copied into the new error/warning.
+    inner = ValueError("x" * 10_000)
+    pdf = ReaderDummy(strict=strict)
+    with mock.patch(
+        "pypdf.generic._data_structures.read_object",
+        side_effect=[NameObject("/A"), inner],
+    ):
+        if strict:
+            with pytest.raises(expected_exception=PdfReadError, match=r"^Error reading PDF file\.$") as exc:
+                DictionaryObject.read_from_stream(BytesIO(b"<< /A (value) >>"), pdf=pdf)  # type: ignore[arg-type]
+            assert exc.value.__cause__ is inner
+        else:
+            result = DictionaryObject.read_from_stream(BytesIO(b"<< /A (value) >>"), pdf=pdf)  # type: ignore[arg-type]
+            assert result == {}
+            messages = [record.getMessage() for record in caplog.records]
+            assert messages
+            assert messages[-1].startswith("ValueError('xxx")
+            assert all(len(message) <= 500 for message in messages)
+
+
+@pytest.mark.parametrize("strict", [True, False])
+def test_dictionary_object__read_from_stream__memory_error(strict) -> None:
+    inner = MemoryError()
+    pdf = ReaderDummy(strict=strict)
+    with mock.patch(
+        "pypdf.generic._data_structures.read_object",
+        side_effect=[NameObject("/A"), inner],
+    ), pytest.raises(expected_exception=PdfReadError, match=r"^Error reading PDF file\.$") as exc:
+        DictionaryObject.read_from_stream(BytesIO(b"<< /A 1 >>"), pdf=pdf)  # type: ignore[arg-type]
+    assert exc.value.__cause__ is inner

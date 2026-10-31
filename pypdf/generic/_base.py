@@ -151,6 +151,8 @@ class PdfObject(PdfObjectProtocol):
         try:
             if not force_duplicate and clone.indirect_reference.pdf == pdf_dest:
                 return clone
+        except MemoryError:  # pragma: no cover  # TODO: BLE001
+            raise
         except Exception:
             pass
         # if hasattr(clone, "indirect_reference"):
@@ -488,6 +490,8 @@ class FloatObject(float, PdfObject):
         try:
             value = float(value)
             return float.__new__(cls, value)
+        except MemoryError:  # pragma: no cover  # TODO: BLE001
+            raise
         except Exception as e:
             # If this isn't a valid decimal (happens in malformed PDFs)
             # fallback to 0
@@ -900,6 +904,8 @@ class NameObject(str, PdfObject):  # noqa: SLOT000
                 try:
                     ret = name.decode(enc)
                     return NameObject(ret)
+                except MemoryError:  # pragma: no cover  # TODO: BLE001
+                    raise
                 except Exception:
                     pass
             raise UnicodeDecodeError("", name, 0, 0, "Code Not Found")

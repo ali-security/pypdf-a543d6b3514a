@@ -171,14 +171,14 @@ def _parse_encoding(
             elif "-UCS2-" in enc:
                 encoding = "utf-16-be"
             else:
-                raise Exception("not found")
-        except Exception:
+                raise KeyError("not found")
+        except KeyError:
             logger_error(f"Advanced encoding {enc} not implemented yet", __name__)
             encoding = enc
     elif isinstance(enc, DictionaryObject) and "/BaseEncoding" in enc:
         try:
             encoding = charset_encoding[cast(str, enc["/BaseEncoding"])].copy()
-        except Exception:
+        except KeyError:
             logger_error(
                 f"Advanced encoding {encoding} not implemented yet",
                 __name__,
@@ -196,6 +196,8 @@ def _parse_encoding(
                 try:
                     if x < len(encoding):
                         encoding[x] = adobe_glyphs[o]  # type: ignore
+                except MemoryError:  # pragma: no cover  # TODO: BLE001
+                    raise
                 except Exception:
                     encoding[x] = o  # type: ignore
                 x += 1

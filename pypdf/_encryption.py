@@ -952,7 +952,7 @@ class Encryption:
         if isinstance(password, str):
             try:
                 pwd = password.encode("latin-1")
-            except Exception:
+            except UnicodeEncodeError:
                 pwd = password.encode("utf-8")
         else:
             pwd = password

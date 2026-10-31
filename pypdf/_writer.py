@@ -518,6 +518,8 @@ class PdfWriter(PdfDocCommon):
             del self._id_translated[id(page_org.indirect_reference.pdf)][  # type: ignore
                 page_org.indirect_reference.idnum  # type: ignore
             ]
+        except MemoryError:  # pragma: no cover  # TODO: BLE001
+            raise
         except Exception:
             pass
 
@@ -584,6 +586,8 @@ class PdfWriter(PdfDocCommon):
             cast(DictionaryObject, self._root_object[CatalogDictionary.ACRO_FORM])[
                 need_appearances
             ] = BooleanObject(state)
+        except MemoryError:  # pragma: no cover  # TODO: BLE001
+            raise
         except Exception as exc:  # pragma: no cover
             logger_warning(
                 f"set_need_appearances_writer({state}) catch : {exc}", __name__
@@ -3137,6 +3141,8 @@ class PdfWriter(PdfDocCommon):
             _i = page
         try:
             return pages[_i.idnum].indirect_reference  # type: ignore
+        except MemoryError:  # pragma: no cover  # TODO: BLE001
+            raise
         except Exception:
             return None
 
@@ -3371,11 +3377,15 @@ class PdfWriter(PdfDocCommon):
         elif isinstance(reader, PdfReader):
             try:
                 del self._id_translated[id(reader)]
+            except MemoryError:  # pragma: no cover  # TODO: BLE001
+                raise
             except Exception:
                 pass
         elif isinstance(reader, IndirectObject):
             try:
                 del self._id_translated[id(reader.pdf)]
+            except MemoryError:  # pragma: no cover  # TODO: BLE001
+                raise
             except Exception:
                 pass
         else:
