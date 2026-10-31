@@ -1862,7 +1862,9 @@ def test_issue2886(caplog):
     name = "issue2886.pdf"
 
     # Actual: 100_067
+    # Mock stream size, as xref table is broken: Declared size 200597 exceeds allowed limit of 25000!
     with mock.patch("pypdf.generic._base.NumberObject._LENGTH_LIMIT", 200_000), \
+            mock.patch("pypdf._reader.get_stream_size", return_value=5_000_000), \
             pytest.raises(PdfReadError, match="Unexpected empty line in Xref table."):
         _ = PdfReader(BytesIO(get_data_from_url(url, name=name)))
 
@@ -2337,3 +2339,46 @@ def test_read_standard_xref_table__end_of_file():
 
     with pytest.raises(expected_exception=PdfReadError, match=r"^Unexpected EOF in Xref table\.$"):
         PdfReader(BytesIO(data))
+
+
+def test_read_standard_xref_table__size_limit() -> None:
+    reader = PdfReader(RESOURCE_ROOT / "crazyones.pdf")
+
+    with pytest.raises(expected_exception=LimitReachedError, match=r"^Declared size 13 exceeds allowed limit of 5!$"):
+        reader._read_standard_xref_table(BytesIO(b"ref\n0 13\n" + b"a" * 100))
+
+    with pytest.raises(
+            expected_exception=PdfReadError,
+            match=r"^Invalid Elementary Object starting with b'a' @101: b'aaaaaaaaaaaaaaaaaaaaaaaaaaa'$"
+    ):
+        reader._read_standard_xref_table(BytesIO(b"ref\n0 5\n" + b"a" * 100))
+
+
+@pytest.mark.timeout(10)
+def test_read_standard_xref_table__size_limit__huge_declared_count(tmp_path) -> None:
+    # The xref table is placed at the very end of the file and declares far more entries
+    # than the file can hold. The trailing digit keeps the entry loop from ever reaching
+    # an empty read, so without the size limit it would iterate the declared count.
+    body = (
+        b"%PDF-1.7\n"
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+        b"2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n"
+    )
+    tail = b"startxref\n%d\n%%%%EOF\n"
+    xref_offset = len(body) + len(tail % len(body))
+    data = body + tail % xref_offset + b"xref\n0 100000000\n0"
+    assert data[xref_offset:xref_offset + 4] == b"xref"
+
+    with pytest.raises(
+            expected_exception=LimitReachedError,
+            match=rf"^Declared size 100000000 exceeds allowed limit of {len(data) // 20}!$"
+    ):
+        PdfReader(BytesIO(data))
+
+    pdf_path = tmp_path / "huge_declared_count.pdf"
+    pdf_path.write_bytes(data)
+    with pdf_path.open(mode="rb") as fd, pytest.raises(
+            expected_exception=LimitReachedError,
+            match=rf"^Declared size 100000000 exceeds allowed limit of {len(data) // 20}!$"
+    ):
+        PdfReader(fd)
