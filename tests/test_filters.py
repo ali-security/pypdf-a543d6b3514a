@@ -264,7 +264,7 @@ def test_ccitt_fax_decode():
 def test_decompress_zlib_error(caplog):
     reader = PdfReader(BytesIO(get_data_from_url(name="tika-952445.pdf")))
     for page in reader.pages:
-        page.extract_text()
+        assert page.extract_text() == ""
     assert "incorrect startxref pointer(3)" in caplog.text
 
 
@@ -890,7 +890,7 @@ def test_decompress():
     # Decompress byte-wise with input limit.
     with mock.patch("pypdf.filters.ZLIB_MAX_RECOVERY_INPUT_LENGTH", 1000), \
             pytest.raises(
-                LimitReachedError, match=r"^Recovery limit reached while decompressing\. 336 bytes remaining\.$"
+                LimitReachedError, match=r"^Recovery limit reached while decompressing\. 337 bytes remaining\.$"
             ):
         decompress(b"A" * 1337)
 
@@ -979,3 +979,18 @@ def test_flatedecode__decode_png_prediction__speed():
     data = bytes(raw)
 
     FlateDecode._decode_png_prediction(data, columns, row_length)
+
+
+@pytest.mark.timeout(10)  # Previously took about 28-33 seconds.
+def test_decompress__fallback__speed() -> None:
+    # `gzip` is an optional module: https://docs.python.org/3/library/gzip.html
+    gzip = pytest.importorskip("gzip")
+
+    buf = BytesIO()
+    size = 1_000_000
+    with gzip.GzipFile(fileobj=buf, mode="wb", compresslevel=1, mtime=0) as f:
+        f.write(os.urandom(size))  # incompressible: stream size ~= input size
+    compressed = buf.getvalue()
+
+    result = decompress(compressed)
+    assert len(result) == size
