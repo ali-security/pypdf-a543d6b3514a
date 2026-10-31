@@ -4,6 +4,7 @@ import shutil
 import subprocess
 from io import BytesIO
 from pathlib import Path
+from typing import cast
 from unittest import mock
 
 import pytest
@@ -659,3 +660,20 @@ def test_get_fields__nesting_depth__reader() -> None:
 
     with mock.patch("pypdf._doc_common.FORM_FIELDS_MAX_DEPTH", 200):
         assert len(reader.get_fields()) == 121
+
+
+def test_get_num_pages__forged_count_after_decrypt():
+    """The unvalidated /Pages /Count must not be used once the document is decrypted."""
+    writer = PdfWriter()
+    writer.add_blank_page(100, 100)
+    pages = cast(DictionaryObject, writer.root_object["/Pages"])
+    pages[NameObject("/Count")] = NumberObject(42)
+    writer.encrypt("")
+    stream = BytesIO()
+    writer.write(stream)
+    stream.seek(0)
+
+    reader = PdfReader(stream)
+    reader.decrypt("")
+    assert len(reader.pages) == 1
+    assert reader.page_labels == ["1"]
