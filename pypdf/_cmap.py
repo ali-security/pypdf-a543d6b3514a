@@ -444,25 +444,39 @@ def parse_bfrange(
 
 def parse_bfchar(line: bytes, map_dict: Dict[Any, Any], int_entry: List[int]) -> None:
     lst = [x for x in line.split(b" ") if x]
-    new_count = len(lst) // 2
+    lst_length = len(lst)
+    if lst_length == 0:
+        logger_warning(f"Skipping broken line {line!r}: Line is empty.", __name__)
+        return
+    if lst_length % 2:
+        logger_warning(f"Ignoring final token of odd-length line {line!r}.", __name__)
+
+    new_count = lst_length // 2
     _check_mapping_size(len(int_entry) + new_count)  # This can be checked beforehand.
     map_dict[-1] = len(lst[0]) // 2
+
     while len(lst) > 1:
+        source = lst[0]
+        destination = lst[1]
+
+        _check_token_length(source, limit=MAX_CMAP_CODE_BYTES_LIMIT)
+
         map_to = ""
         # placeholder (see above) means empty string
-        if lst[1] != b".":
+        if destination != b".":
+            _check_token_length(destination, limit=MAX_CMAP_STRING_BYTES_LIMIT)
             try:
-                map_to = unhexlify(lst[1]).decode(
-                    "charmap" if len(lst[1]) < 4 else "utf-16-be", "surrogatepass"
+                map_to = unhexlify(destination).decode(
+                    "charmap" if len(destination) < 4 else "utf-16-be", "surrogatepass"
                 )  # join is here as some cases where the code was split
             except BinasciiError as exception:
-                logger_warning(f"Got invalid hex string: {exception!s} ({lst[1]!r})", __name__)
+                logger_warning(f"Got invalid hex string: {exception!s} ({destination!r})", __name__)
         map_dict[
-            unhexlify(lst[0]).decode(
+            unhexlify(source).decode(
                 "charmap" if map_dict[-1] == 1 else "utf-16-be", "surrogatepass"
             )
         ] = map_to
-        int_entry.append(int(lst[0], 16))
+        int_entry.append(int(source, 16))
         lst = lst[2:]
 
 
