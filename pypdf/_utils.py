@@ -174,7 +174,7 @@ def read_until_whitespace(stream: StreamType, maxchars: Optional[int] = None) ->
         The data which was read.
 
     """
-    txt = b""
+    txt = bytearray()
     while True:
         tok = stream.read(1)
         if tok.isspace() or not tok:
@@ -182,7 +182,7 @@ def read_until_whitespace(stream: StreamType, maxchars: Optional[int] = None) ->
         txt += tok
         if len(txt) == maxchars:
             break
-    return txt
+    return bytes(txt)
 
 
 def read_non_whitespace(stream: StreamType) -> bytes:
