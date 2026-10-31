@@ -2144,3 +2144,70 @@ def test_get_object_from_stream__size_limit__object_not_in_stream(caplog):
         "NumberObject(b'') invalid; use 0 instead",
         "NumberObject(b'') invalid; use 0 instead",
     ]
+
+
+@pytest.mark.timeout(10)
+def test_read_standard_xref_table__malformed__speed():
+    body = (
+        b"%PDF-1.7\n"
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n"
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>\nendobj\n"
+    )
+    xref_offset = len(body)
+    corrupt_entry = b"xxxxxxxxxxxxxxxx 0\r\n"
+    assert len(corrupt_entry) == 20
+    entry_count = 20_000
+    data = (
+        body
+        + f"xref\n1 {entry_count}\n".encode("ascii")
+        + corrupt_entry * entry_count
+        + b"trailer\n<< /Size "
+        + str(entry_count + 1).encode("ascii")
+        + b" /Root 1 0 R >>\nstartxref\n"
+        + str(xref_offset).encode("ascii")
+        + b"\n%%EOF\n"
+    )
+
+    reader = PdfReader(BytesIO(data))
+    assert len(reader.pages) == 1
+
+
+def test_load_recovery_cache():
+    reader = PdfReader(RESOURCE_ROOT / "crazyones.pdf")
+
+    pdf_objects = [
+        (1, 0, 10),
+        (1, 1, 20),
+        (2, 0, 30),
+        (3, 1, 42),
+    ]
+    with mock.patch.object(reader, "_find_pdf_objects", return_value=iter(pdf_objects)):
+        assert reader._load_recovery_cache(b"") == {1: (10, 0), 2: (30, 0), 3: (42, 1)}
+
+
+def test_read_standard_xref_table__malformed__recovered_offsets():
+    body = (
+        b"%PDF-1.7\n"
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n"
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>\nendobj\n"
+    )
+    xref_offset = len(body)
+    corrupt_entry = b"xxxxxxxxxxxxxxxx 0\r\n"
+    data = (
+        body
+        + b"xref\n0 4\n0000000000 65535 f\r\n"
+        + corrupt_entry * 3
+        + b"trailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n"
+        + str(xref_offset).encode("ascii")
+        + b"\n%%EOF\n"
+    )
+
+    reader = PdfReader(BytesIO(data))
+    assert reader.xref[0] == {
+        1: body.index(b"1 0 obj"),
+        2: body.index(b"2 0 obj"),
+        3: body.index(b"3 0 obj"),
+    }
+    assert len(reader.pages) == 1

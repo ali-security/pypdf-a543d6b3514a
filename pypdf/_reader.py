@@ -759,6 +759,15 @@ class PdfReader(PdfDocCommon):
                 raise PdfReadError("startxref not found")
         return startxref
 
+    def _load_recovery_cache(self, data: bytes) -> Dict[int, Tuple[int, int]]:
+        cache = {}
+        for object_number, generation_number, object_start in self._find_pdf_objects(data):
+            if object_number in cache:
+                # Always use the first match.
+                continue
+            cache[object_number] = (object_start, generation_number)
+        return cache
+
     def _read_standard_xref_table(self, stream: StreamType) -> None:
         # standard cross-reference table
         ref = stream.read(3)
@@ -767,6 +776,7 @@ class PdfReader(PdfDocCommon):
         read_non_whitespace(stream)
         stream.seek(-1, 1)
         first_time = True  # check if the first time looking at the xref table
+        recovery_cache: Optional[Dict[int, Tuple[int, int]]] = None
         while True:
             num = cast(int, read_object(stream, self))
             if first_time and num != 0:
@@ -823,29 +833,32 @@ class PdfReader(PdfDocCommon):
 
                     offset, generation = int(offset_b), int(generation_b)
                 except Exception:
-                    if hasattr(stream, "getbuffer"):
-                        buf = bytes(stream.getbuffer())
-                    else:
-                        p = stream.tell()
-                        stream.seek(0, 0)
-                        buf = stream.read(-1)
-                        stream.seek(p)
+                    if recovery_cache is None:
+                        if hasattr(stream, "getbuffer"):
+                            buf = bytes(stream.getbuffer())
+                        else:
+                            p = stream.tell()
+                            stream.seek(0, 0)
+                            buf = stream.read(-1)
+                            stream.seek(p)
 
-                    f = re.search(rf"{num}\s+(\d+)\s+obj".encode(), buf)
-                    if f is None:
+                        recovery_cache = self._load_recovery_cache(buf)
+
+                    if num not in recovery_cache:
                         logger_warning(
                             f"entry {num} in Xref table invalid; object not found",
                             __name__,
                         )
                         generation = 65535
                         offset = -1
+                        entry_type_b = b"f"
                     else:
                         logger_warning(
                             f"entry {num} in Xref table invalid but object found",
                             __name__,
                         )
-                        generation = int(f.group(1))
-                        offset = f.start()
+                        offset, generation = recovery_cache[num]
+                        entry_type_b = b"n"
 
                 if generation not in self.xref:
                     self.xref[generation] = {}
