@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from functools import cached_property
-from typing import TYPE_CHECKING, Generator, cast
+from typing import TYPE_CHECKING, Iterator, cast
 
 from pypdf._utils import format_iso8824_date, parse_iso8824_date
 from pypdf.constants import CatalogAttributes as CA
@@ -275,11 +275,17 @@ class EmbeddedFile:
         else:
             params[NameObject("/CheckSum")] = value
 
+    @property
+    def _names(self) -> Iterator[str]:
+        yield self.name
+        if self.alternative_name is not None and self.alternative_name != self.name:
+            yield self.alternative_name
+
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__} name={self.name!r}>"
 
     @classmethod
-    def _load_from_names(cls, names: ArrayObject) -> Generator[EmbeddedFile]:
+    def _load_from_names(cls, names: ArrayObject) -> Iterator[EmbeddedFile]:
         """
         Convert the given name tree into class instances.
 
@@ -298,7 +304,7 @@ class EmbeddedFile:
                 yield EmbeddedFile(name=direct_name, pdf_object=file_dictionary)
 
     @classmethod
-    def _load(cls, catalog: DictionaryObject) -> Generator[EmbeddedFile]:
+    def _load(cls, catalog: DictionaryObject) -> Iterator[EmbeddedFile]:
         """
         Load the embedded files for the given document catalog.
 
