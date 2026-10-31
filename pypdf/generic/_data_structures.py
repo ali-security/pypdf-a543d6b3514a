@@ -1372,6 +1372,8 @@ class ContentStream(DecodedStreamObject):
         settings = DictionaryObject()
         while True:
             tok = read_non_whitespace(stream)
+            if not tok:
+                raise PdfStreamError("Unexpected end of stream.")
             stream.seek(-1, 1)
             if tok == b"I":
                 # "ID" - begin of image data

@@ -1617,3 +1617,34 @@ def test_content_stream__parse_content_stream__limits() -> None:
             match=r"^Read stream length of 240 exceeds maximum allowed length of 128\.$"
     ):
         content_stream._parse_content_stream(stream)
+
+
+@pytest.mark.timeout(10)
+def test_content_stream__read_inline_image__end_of_stream() -> None:
+    # Broken content stream, for example due to filter errors.
+    # Specific example:
+    #   Error -3 while decompressing data: invalid distance too far back
+    #   b'q 0.1 0 0 0.1 0 0 cm\n/R7 gs\n0 g\nq 4.8 0 0 -135.6 2155.08 7150.48 cm\nBI\n/IM true\n/W001'
+    content_stream = ContentStream(stream=None, pdf=None)
+
+    with pytest.raises(expected_exception=PdfStreamError, match=r"^Unexpected end of stream\.$"):
+        content_stream._read_inline_image(BytesIO(b"\n/IM true\n/W001"))
+
+
+@pytest.mark.timeout(10)
+def test_content_stream__parse_content_stream__truncated_inline_image() -> None:
+    content_stream = ContentStream(stream=None, pdf=None)
+
+    stream = BytesIO(
+        b"q 0.1 0 0 0.1 0 0 cm\n/R7 gs\n0 g\nq 4.8 0 0 -135.6 2155.08 7150.48 cm\nBI\n/IM true\n/W001"
+    )
+    with pytest.raises(expected_exception=PdfStreamError, match=r"^Unexpected end of stream\.$"):
+        content_stream._parse_content_stream(stream)
+
+    # Truncation before the "ID" operator.
+    with pytest.raises(expected_exception=PdfStreamError, match=r"^Unexpected end of stream\.$"):
+        content_stream._read_inline_image(BytesIO(b"/W 10 /H 20"))
+
+    # Truncation right after the "BI" operator.
+    with pytest.raises(expected_exception=PdfStreamError, match=r"^Unexpected end of stream\.$"):
+        content_stream._read_inline_image(BytesIO(b""))
