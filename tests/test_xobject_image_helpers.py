@@ -3,6 +3,7 @@ from io import BytesIO
 from pathlib import Path
 
 import pytest
+from PIL import Image, UnidentifiedImageError
 
 from pypdf import PdfReader
 from pypdf._xobj_image_helpers import _extended_image_frombytes, _handle_flate, bits2byte
@@ -204,3 +205,31 @@ def test_extended_image_frombytes__limit(mode: str, expected: str) -> None:
             match=rf"^Requested image buffer size {expected} exceeds limit 75000000\.$"
     ):
         _ = _extended_image_frombytes(mode=mode, size=(100_000, 80_000), data=b"")
+
+
+@pytest.mark.parametrize("image_format", ["BMP", "GIF", "PNG", "TIFF"])
+def test_xobj_to_image__dct_decode_requires_jpeg(image_format: str) -> None:
+    """/DCTDecode data must not be handed to arbitrary Pillow image plugins."""
+    data = BytesIO()
+    Image.new("L", (1, 1)).save(data, format=image_format)
+    image = DecodedStreamObject()
+    image[NameObject("/Type")] = NameObject("/XObject")
+    image[NameObject("/Subtype")] = NameObject("/Image")
+    image[NameObject("/ColorSpace")] = NameObject("/DeviceGray")
+    image[NameObject("/BitsPerComponent")] = NumberObject(8)
+    image[NameObject("/Width")] = NumberObject(1)
+    image[NameObject("/Height")] = NumberObject(1)
+    image[NameObject("/Filter")] = NameObject("/DCTDecode")
+    image.set_data(data.getvalue())
+
+    with pytest.raises(UnidentifiedImageError):
+        _xobj_to_image(image)
+
+    data = BytesIO()
+    Image.new("L", (1, 1)).save(data, format="JPEG")
+    image.set_data(data.getvalue())
+
+    extension, _, img = _xobj_to_image(image)
+
+    assert extension == ".jpg"
+    assert img.format == "JPEG"
