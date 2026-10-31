@@ -99,6 +99,9 @@ OUTLINE_MAX_ENTRIES = 100_000
 OUTLINE_MAX_DEPTH = 100
 FORM_FIELDS_MAX_ENTRIES = 100_000  # The maximum allowed number of form fields.
 FORM_FIELDS_MAX_DEPTH = 100  # The maximum allowed depth for form fields.
+# The maximum allowed total number of page dictionary entries copied while flattening the page tree.
+# A page referenced multiple times is copied once per reference.
+PAGE_TREE_MAXIMUM_PAGE_ENTRIES = 2_000_000
 
 _UNSET = object()
 
@@ -1215,6 +1218,7 @@ class PdfDocCommon:
         pages: Union[None, DictionaryObject, PageObject] = None,
         inherit: Optional[Dict[str, Any]] = None,
         indirect_reference: Optional[IndirectObject] = None,
+        _remaining_page_entries: Optional[_TraversalState] = None,
     ) -> None:
         """
         Process the document pages to ease searching.
@@ -1233,6 +1237,8 @@ class PdfDocCommon:
             pages:
             inherit:
             indirect_reference: Used recursively to flatten the /Pages object.
+            _remaining_page_entries: Used recursively to track the remaining
+                document-wide budget of page dictionary entries.
 
         """
         inheritable_page_attributes = (
@@ -1243,6 +1249,8 @@ class PdfDocCommon:
         )
         if inherit is None:
             inherit = {}
+        if _remaining_page_entries is None:
+            _remaining_page_entries = _TraversalState(entry_count=PAGE_TREE_MAXIMUM_PAGE_ENTRIES)
         if is_null_or_none(pages):
             # Fix issue 327: set flattened_pages attribute only for
             # decrypted file
@@ -1277,12 +1285,31 @@ class PdfDocCommon:
                 if obj:
                     # damaged file may have invalid child in /Pages
                     try:
-                        self._flatten(list_only, obj, inherit, **addt)
+                        self._flatten(
+                            list_only, obj, inherit, _remaining_page_entries=_remaining_page_entries, **addt
+                        )
                     except RecursionError:
                         raise PdfReadError(
                             "Maximum recursion depth reached during page flattening."
                         )
         elif t == "/Page":
+            # Indirect PageObjects are populated by the constructor even when
+            # list_only=True. Inline dictionaries are copied only when list_only=False.
+            entry_count = (
+                len(pages)
+                if indirect_reference is not None or not list_only
+                else 0
+            )
+
+            # Inherited attributes are inserted only when missing from the page.
+            entry_count += sum(
+                attribute not in pages for attribute in inherit
+            )
+
+            _remaining_page_entries.entry_count -= entry_count
+            if _remaining_page_entries.entry_count < 0:
+                raise LimitReachedError("Maximum page tree page entry limit exceeded!")
+
             for attr_in, value in inherit.items():
                 # if the page has its own value, it does not inherit the
                 # parent's value
