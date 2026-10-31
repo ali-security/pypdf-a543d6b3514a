@@ -329,6 +329,10 @@ MAX_CMAP_STRING_BYTES = 512
 MAX_CMAP_CODE_BYTES_LIMIT = MAX_CMAP_CODE_BYTES * 2
 MAX_CMAP_STRING_BYTES_LIMIT = MAX_CMAP_STRING_BYTES * 2
 
+# Limits for the /W array of CID fonts.
+MAX_CID_WIDTH_ENTRY_COUNT = 65_536
+MAX_WIDTH_ENTRY_COUNT = 100_000
+
 
 def _check_mapping_size(size: int) -> None:
     if size > MAPPING_DICTIONARY_SIZE_LIMIT:
@@ -346,6 +350,22 @@ def _check_token_length(token: bytes, limit: int) -> None:
         raise LimitReachedError(
             f"Maximum /ToUnicode {description} length exceeded: {token_length} > {limit}."
         )
+
+
+def _check_cid_width_range_length(start: int, end: int) -> None:
+    if end < start:
+        raise LimitReachedError(
+            f"Invalid CID width range: {start}..{end}."
+        )
+
+    count = end - start
+    if count > MAX_CID_WIDTH_ENTRY_COUNT:
+        raise LimitReachedError(f"CID width range too large: {count} > {MAX_CID_WIDTH_ENTRY_COUNT}.")
+
+
+def _check_width_entry_count(count: int) -> None:
+    if count > MAX_WIDTH_ENTRY_COUNT:
+        raise LimitReachedError(f"Too many character widths: {count} > {MAX_WIDTH_ENTRY_COUNT}.")
 
 
 def __parse_bfrange__decode(map_dict: Dict[Any, Any], fmt: bytes, code: int) -> str:
@@ -469,28 +489,38 @@ def build_font_width_map(
             w = ft1["/W"].get_object()
         else:
             w = []
-        while len(w) > 0:
-            st = w[0] if isinstance(w[0], int) else w[0].get_object()
-            second = w[1].get_object()
+        entry_count = 0
+        # Walk the array by index instead of slicing it to keep this linear.
+        w_idx = 0
+        while w_idx < len(w):
+            st = w[w_idx] if isinstance(w[w_idx], int) else w[w_idx].get_object()
+            second = w[w_idx + 1].get_object()
             if isinstance(second, int):
                 # C_first C_last same_W
                 en = second
-                width = w[2].get_object()
+                width = w[w_idx + 2].get_object()
                 if not isinstance(width, (int, float)):
                     logger_warning(f"Expected numeric value for width, got {width}. Ignoring it.", __name__)
-                    w = w[3:]
+                    w_idx += 3
                     continue
-                for c_code in range(st, en + 1):
+                c_codes = range(st, en + 1)
+                _check_cid_width_range_length(c_codes.start, c_codes.stop)
+                entry_count += len(c_codes)
+                _check_width_entry_count(entry_count)
+                for c_code in c_codes:
                     font_width_map[chr(c_code)] = width
-                w = w[3:]
+                w_idx += 3
             elif isinstance(second, list):
                 # Starting_C [W1 W2 ... Wn]
                 c_code = st
+                _check_cid_width_range_length(c_code, c_code + len(second))
+                entry_count += len(second)
+                _check_width_entry_count(entry_count)
                 for ww in second:
                     width = ww.get_object()
                     font_width_map[chr(c_code)] = width
                     c_code += 1
-                w = w[2:]
+                w_idx += 2
             else:
                 logger_warning(
                     "unknown widths : \n" + (ft1["/W"]).__repr__(),

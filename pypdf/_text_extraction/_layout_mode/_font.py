@@ -1,8 +1,9 @@
 """Font constants and classes for "layout" mode text operations"""
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Sequence, Union, cast
+from typing import Any, Dict, Sequence, Union
 
+from ..._cmap import _check_cid_width_range_length, _check_width_entry_count
 from ..._codecs import adobe_glyphs
 from ...errors import ParseError
 from ...generic import IndirectObject
@@ -77,12 +78,13 @@ class Font:
                 #   (2) A character start index, a character stop index, and a width, e.g.
                 #       `45 65 500` applies width 500 to characters 45-65.
                 skip_count = 0
+                entry_count = 0
                 _w = d_font.get("/W", [])
                 for idx, w_entry in enumerate(_w):
-                    w_entry = w_entry.get_object()
                     if skip_count:
                         skip_count -= 1
                         continue
+                    w_entry = w_entry.get_object()
                     if not isinstance(w_entry, (int, float)):  # pragma: no cover
                         # We should never get here due to skip_count above. Add a
                         # warning and or use reader's "strict" to force an ex???
@@ -90,16 +92,16 @@ class Font:
                     # check for format (1): `int [int int int int ...]`
                     w_next_entry = _w[idx + 1].get_object()
                     if isinstance(w_next_entry, Sequence):
-                        start_idx, width_list = w_entry, w_next_entry
+                        start_idx, width_list = int(w_entry), w_next_entry
+                        stop_idx = start_idx + len(width_list)
+                        _check_cid_width_range_length(start_idx, stop_idx)
+                        entry_count += (stop_idx - start_idx)
+                        _check_width_entry_count(entry_count)
                         self.width_map.update(
                             {
                                 ord_map[_cidx]: _width
                                 for _cidx, _width in zip(
-                                    range(
-                                        cast(int, start_idx),
-                                        cast(int, start_idx) + len(width_list),
-                                        1,
-                                    ),
+                                    range(start_idx, stop_idx, 1),
                                     width_list,
                                 )
                                 if _cidx in ord_map
@@ -111,15 +113,18 @@ class Font:
                         _w[idx + 2].get_object(), (int, float)
                     ):
                         start_idx, stop_idx, const_width = (
-                            w_entry,
-                            w_next_entry,
+                            int(w_entry),
+                            int(w_next_entry),
                             _w[idx + 2].get_object(),
                         )
+                        _check_cid_width_range_length(start_idx, stop_idx + 1)
+                        entry_count += (stop_idx - start_idx + 1)
+                        _check_width_entry_count(entry_count)
                         self.width_map.update(
                             {
                                 ord_map[_cidx]: const_width
                                 for _cidx in range(
-                                    cast(int, start_idx), cast(int, stop_idx + 1), 1
+                                    start_idx, stop_idx + 1, 1
                                 )
                                 if _cidx in ord_map
                             }

@@ -5,10 +5,25 @@ from pathlib import Path
 import pytest
 
 from pypdf import PdfReader, PdfWriter
-from pypdf._cmap import _check_token_length, build_char_map, get_encoding, parse_bfchar, parse_bfrange
+from pypdf._cmap import (
+    _check_token_length,
+    build_char_map,
+    build_font_width_map,
+    get_encoding,
+    parse_bfchar,
+    parse_bfrange,
+)
 from pypdf._codecs import charset_encoding
 from pypdf.errors import LimitReachedError
-from pypdf.generic import ArrayObject, DictionaryObject, IndirectObject, NameObject, NullObject, StreamObject
+from pypdf.generic import (
+    ArrayObject,
+    DictionaryObject,
+    IndirectObject,
+    NameObject,
+    NullObject,
+    NumberObject,
+    StreamObject,
+)
 
 from . import get_data_from_url
 
@@ -511,3 +526,142 @@ def test_parse_bfchar__iteration_limit():
             map_dict=map_dict, int_entry=int_entry,
         )
     assert map_dict == {}
+
+
+def _cid_font_with_widths(widths):
+    return DictionaryObject({
+        NameObject("/Type"): NameObject("/Font"),
+        NameObject("/Subtype"): NameObject("/Type0"),
+        NameObject("/BaseFont"): NameObject("/Dummy"),
+        NameObject("/Encoding"): NameObject("/Identity-H"),
+        NameObject("/DescendantFonts"): ArrayObject([
+            DictionaryObject({
+                NameObject("/Type"): NameObject("/Font"),
+                NameObject("/Subtype"): NameObject("/CIDFontType2"),
+                NameObject("/BaseFont"): NameObject("/Dummy"),
+                NameObject("/W"): ArrayObject(widths),
+            })
+        ]),
+    })
+
+
+@pytest.mark.timeout(30)
+def test_build_font_width_map__cid_width_limits():
+    # Format 1 exceeding length.
+    font = _cid_font_with_widths([
+        NumberObject(1), ArrayObject([NumberObject(42)] * 100_000),
+    ])
+    with pytest.raises(
+            expected_exception=LimitReachedError, match=r"^CID width range too large: 100000 > 65536\.$"
+    ):
+        build_font_width_map(font, 0.0)
+
+    # Format 1 exceeding entry count.
+    font = _cid_font_with_widths([
+        NumberObject(1), ArrayObject([NumberObject(42)] * 55_000),
+        NumberObject(1), ArrayObject([NumberObject(13)] * 60_000),
+    ])
+    with pytest.raises(
+            expected_exception=LimitReachedError, match=r"^Too many character widths: 115000 > 100000\.$"
+    ):
+        build_font_width_map(font, 0.0)
+
+    # Format 2 exceeding length.
+    font = _cid_font_with_widths([
+        NumberObject(1), NumberObject(100_000), NumberObject(42),
+    ])
+    with pytest.raises(
+            expected_exception=LimitReachedError, match=r"^CID width range too large: 100000 > 65536\.$"
+    ):
+        build_font_width_map(font, 0.0)
+
+    # Format 2 exceeding entry count.
+    font = _cid_font_with_widths([
+        NumberObject(1), NumberObject(55_000), NumberObject(42),
+        NumberObject(1), NumberObject(60_000), NumberObject(13),
+    ])
+    with pytest.raises(
+            expected_exception=LimitReachedError, match=r"^Too many character widths: 115000 > 100000\.$"
+    ):
+        build_font_width_map(font, 0.0)
+
+    # Inverted range.
+    font = _cid_font_with_widths([
+        NumberObject(13), NumberObject(1), NumberObject(42),
+    ])
+    with pytest.raises(
+            expected_exception=LimitReachedError, match=r"^Invalid CID width range: 13\.\.2\.$"
+    ):
+        build_font_width_map(font, 0.0)
+
+
+@pytest.mark.timeout(30)
+def test_build_font_width_map__cid_width_limits__within_limits():
+    # Format 2 with the maximum range length.
+    font = _cid_font_with_widths([
+        NumberObject(0), NumberObject(65_535), NumberObject(42),
+    ])
+    width_map = build_font_width_map(font, 0.0)
+    assert len(width_map) == 65_536 + 1
+    assert width_map[chr(0)] == 42
+    assert width_map[chr(65_535)] == 42
+
+    # Format 1 with the maximum range length.
+    font = _cid_font_with_widths([
+        NumberObject(0), ArrayObject([NumberObject(42)] * 65_536),
+    ])
+    width_map = build_font_width_map(font, 0.0)
+    assert len(width_map) == 65_536 + 1
+
+    # Mixed formats with the maximum entry count.
+    font = _cid_font_with_widths([
+        NumberObject(0), NumberObject(49_999), NumberObject(42),
+        NumberObject(50_000), ArrayObject([NumberObject(13)] * 50_000),
+    ])
+    width_map = build_font_width_map(font, 0.0)
+    assert len(width_map) == 100_000 + 1
+    assert width_map[chr(49_999)] == 42
+    assert width_map[chr(50_000)] == 13
+
+    # Regular width definitions, including an empty range.
+    font = _cid_font_with_widths([
+        NumberObject(1), ArrayObject([NumberObject(500), NumberObject(600)]),
+        NumberObject(10), NumberObject(12), NumberObject(700),
+        NumberObject(20), NumberObject(19), NumberObject(800),
+    ])
+    assert build_font_width_map(font, 0.0) == {
+        "\x01": 500,
+        "\x02": 600,
+        "\x0a": 700,
+        "\x0b": 700,
+        "\x0c": 700,
+        "default": 0.0,
+    }
+
+
+@pytest.mark.timeout(30)
+def test_build_font_width_map__many_empty_width_lists():
+    # Width definitions without entries do not count towards the limits,
+    # but processing them has to stay linear in the size of the /W array.
+    font = _cid_font_with_widths([NumberObject(1), ArrayObject()] * 500_000)
+    assert build_font_width_map(font, 0.0) == {"default": 0.0}
+
+
+@pytest.mark.timeout(30)
+def test_extract_text__cid_width_range_limit():
+    writer = PdfWriter()
+    font = writer._add_object(_cid_font_with_widths(
+        [NumberObject(0), NumberObject(0x10FFFF), NumberObject(500)] * 1_000
+    ))
+
+    page = writer.add_blank_page(width=100, height=100)
+    page[NameObject("/Resources")] = DictionaryObject({
+        NameObject("/Font"): DictionaryObject({
+            NameObject("/F1"): font.indirect_reference,
+        })
+    })
+
+    with pytest.raises(
+            expected_exception=LimitReachedError, match=r"^CID width range too large: 1114112 > 65536\.$"
+    ):
+        page.extract_text()

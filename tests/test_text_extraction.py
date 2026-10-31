@@ -21,8 +21,8 @@ from pypdf._text_extraction._layout_mode._fixed_width_page import (
     text_show_operations,
 )
 from pypdf._text_extraction._layout_mode._text_state_manager import TextStateManager
-from pypdf.errors import ParseError, PdfReadError
-from pypdf.generic import ContentStream, DictionaryObject, NameObject
+from pypdf.errors import LimitReachedError, ParseError, PdfReadError
+from pypdf.generic import ArrayObject, ContentStream, DictionaryObject, NameObject, NumberObject
 
 from . import get_data_from_url
 
@@ -739,3 +739,119 @@ def test_page_object__layout_mode_fonts__cyclic(caplog) -> None:
 
     assert page._layout_mode_fonts() == fonts
     assert caplog.messages == ["Detected cycle in /Parent hierarchy when retrieving fonts."]
+
+
+def _layout_mode_cid_font(widths, char_map=None):
+    return _layout_mode.Font(
+        "/Type0",
+        space_width=200,
+        encoding="utf-16-be",
+        char_map=char_map or {},
+        font_dictionary={
+            "/DescendantFonts": [
+                DictionaryObject({NameObject("/W"): ArrayObject(widths)}),
+            ]
+        },
+    )
+
+
+@pytest.mark.timeout(30)
+def test_layout_mode_font__cid_width_limits():
+    # Format 1 exceeding length.
+    with pytest.raises(
+            expected_exception=LimitReachedError, match=r"^CID width range too large: 100000 > 65536\.$"
+    ):
+        _layout_mode_cid_font([
+            NumberObject(1), ArrayObject([NumberObject(42)] * 100_000),
+        ])
+
+    # Format 1 exceeding entry count.
+    with pytest.raises(
+            expected_exception=LimitReachedError, match=r"^Too many character widths: 115000 > 100000\.$"
+    ):
+        _layout_mode_cid_font([
+            NumberObject(1), ArrayObject([NumberObject(42)] * 55_000),
+            NumberObject(1), ArrayObject([NumberObject(13)] * 60_000),
+        ])
+
+    # Format 2 exceeding length.
+    with pytest.raises(
+            expected_exception=LimitReachedError, match=r"^CID width range too large: 100000 > 65536\.$"
+    ):
+        _layout_mode_cid_font([
+            NumberObject(1), NumberObject(100_000), NumberObject(42),
+        ])
+
+    # Format 2 exceeding entry count.
+    with pytest.raises(
+            expected_exception=LimitReachedError, match=r"^Too many character widths: 115000 > 100000\.$"
+    ):
+        _layout_mode_cid_font([
+            NumberObject(1), NumberObject(55_000), NumberObject(42),
+            NumberObject(1), NumberObject(60_000), NumberObject(13),
+        ])
+
+    # Inverted range.
+    with pytest.raises(
+            expected_exception=LimitReachedError, match=r"^Invalid CID width range: 13\.\.2\.$"
+    ):
+        _layout_mode_cid_font([
+            NumberObject(13), NumberObject(1), NumberObject(42),
+        ])
+
+
+@pytest.mark.timeout(30)
+def test_layout_mode_font__cid_width_limits__within_limits():
+    # Ranges up to the limits are accepted.
+    font = _layout_mode_cid_font(
+        [
+            NumberObject(0), NumberObject(49_999), NumberObject(42),
+            NumberObject(50_000), ArrayObject([NumberObject(13)] * 50_000),
+        ],
+        char_map={chr(1): "a", chr(50_001): "b"},
+    )
+    assert font.width_map == {"a": 42, "b": 13}
+
+    # Regular width definitions, including an empty range.
+    font = _layout_mode_cid_font(
+        [
+            NumberObject(1), ArrayObject([NumberObject(500), NumberObject(600)]),
+            NumberObject(10), NumberObject(12), NumberObject(700),
+            NumberObject(20), NumberObject(19), NumberObject(800),
+        ],
+        char_map={chr(1): "a", chr(2): "b", chr(11): "c", chr(20): "d"},
+    )
+    assert font.width_map == {"a": 500, "b": 600, "c": 700}
+
+
+@pytest.mark.timeout(30)
+def test_layout_mode__cid_width_range_limit():
+    writer = PdfWriter()
+    font = writer._add_object(DictionaryObject({
+        NameObject("/Type"): NameObject("/Font"),
+        NameObject("/Subtype"): NameObject("/Type0"),
+        NameObject("/BaseFont"): NameObject("/Dummy"),
+        NameObject("/Encoding"): NameObject("/Identity-H"),
+        NameObject("/DescendantFonts"): ArrayObject([
+            # Only the first descendant font is evaluated outside the layout mode.
+            DictionaryObject({
+                NameObject("/W"): ArrayObject([NumberObject(1), ArrayObject([NumberObject(500)])]),
+            }),
+            DictionaryObject({
+                NameObject("/W"): ArrayObject([NumberObject(0), NumberObject(2_000_000_000), NumberObject(500)]),
+            }),
+        ]),
+    }))
+
+    page = writer.add_blank_page(width=100, height=100)
+    page[NameObject("/Resources")] = DictionaryObject({
+        NameObject("/Font"): DictionaryObject({
+            NameObject("/F1"): font.indirect_reference,
+        })
+    })
+    page.pdf = writer
+
+    with pytest.raises(
+            expected_exception=LimitReachedError, match=r"^CID width range too large: 2000000001 > 65536\.$"
+    ):
+        page.extract_text(extraction_mode="layout")
