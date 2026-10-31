@@ -799,18 +799,25 @@ class TreeObject(DictionaryObject):
             return child
         prev = cast("DictionaryObject", self["/Last"])
 
+        visited: Set[int] = set()
         while prev.indirect_reference != before:
+            prev_id = id(prev)
+            if prev_id in visited:
+                raise LimitReachedError("Detected cycle in tree structure.")
+            visited.add(prev_id)
             if "/Next" in prev:
                 prev = cast("TreeObject", prev["/Next"])
-            else:  # append at the end
-                prev[NameObject("/Next")] = cast("TreeObject", child)
-                child_obj[NameObject("/Prev")] = prev.indirect_reference
-                child_obj[NameObject("/Parent")] = self.indirect_reference
-                if "/Next" in child_obj:
-                    del child_obj["/Next"]
-                self[NameObject("/Last")] = child
-                inc_parent_counter(self, child_obj.get("/Count", 1))
-                return child
+                continue
+
+            # append at the end
+            prev[NameObject("/Next")] = cast("TreeObject", child)
+            child_obj[NameObject("/Prev")] = prev.indirect_reference
+            child_obj[NameObject("/Parent")] = self.indirect_reference
+            if "/Next" in child_obj:
+                del child_obj["/Next"]
+            self[NameObject("/Last")] = child
+            inc_parent_counter(self, child_obj.get("/Count", 1))
+            return child
         try:  # insert as first or in the middle
             assert isinstance(prev["/Prev"], DictionaryObject)
             prev["/Prev"][NameObject("/Next")] = child
