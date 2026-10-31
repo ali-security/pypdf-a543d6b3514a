@@ -3580,7 +3580,8 @@ def generate_appearance_stream(
     font_height: float,
     y_offset: float,
 ) -> bytes:
-    ap_stream = f"q\n/Tx BMC \nq\n1 1 {rct.width - 1} {rct.height - 1} re\nW\nBT\n{da}\n".encode()
+    ap_stream = bytearray()
+    ap_stream += f"q\n/Tx BMC \nq\n1 1 {rct.width - 1} {rct.height - 1} re\nW\nBT\n{da}\n".encode()
     for line_number, line in enumerate(txt.replace("\n", "\r").split("\r")):
         if line in sel:
             # may be improved but cannot find how to get fill working => replaced with lined box
@@ -3601,4 +3602,4 @@ def generate_appearance_stream(
         else:
             ap_stream += b"(" + b"".join(enc_line) + b") Tj\n"
     ap_stream += b"ET\nQ\nEMC\nQ\n"
-    return ap_stream
+    return bytes(ap_stream)
