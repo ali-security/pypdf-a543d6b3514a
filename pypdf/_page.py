@@ -61,6 +61,7 @@ from ._utils import (
     CompressedTransformationMatrix,
     TransformationMatrixType,
     _human_readable_bytes,
+    _TraversalState,
     logger_warning,
     matrix_multiply,
 )
@@ -96,6 +97,9 @@ except ImportError:
     pil_not_imported = True  # error will be raised only when using images
 
 MERGE_CROP_BOX = "cropbox"  # pypdf<=3.4.0 used 'trimbox'
+
+# TODO: Make configurable.
+MAX_XFORM_INVOCATIONS_PER_EXTRACTION = 5_000
 
 
 def _get_rectangle(self: Any, name: str, defaults: Iterable[str]) -> RectangleObject:
@@ -1674,6 +1678,7 @@ class PageObject(DictionaryObject):
         visitor_text: Optional[Callable[[Any, Any, Any, Any, Any], None]] = None,
         *,
         known_ids: Optional[Set[int]] = None,
+        traversal_state: Optional[_TraversalState] = None
     ) -> str:
         """
         See extract_text for most arguments.
@@ -1686,6 +1691,8 @@ class PageObject(DictionaryObject):
         """
         if known_ids is None:
             known_ids = set()
+        if traversal_state is None:
+            traversal_state = _TraversalState()
 
         extractor = TextExtraction()
         cmaps: Dict[
@@ -1776,30 +1783,19 @@ class PageObject(DictionaryObject):
                 except IndexError:
                     pass
                 try:
-                    xobj = cast(DictionaryObject, resources_dict["/XObject"])
-                    xform = cast(EncodedStreamObject, xobj[operands[0]])
-                    if xform["/Subtype"] != NameObject("/Image"):
-                        xform_id = id(xform)
-                        if xform_id in known_ids:
-                            logger_warning(
-                                f"Detected cyclic form XObject reference, skipping {operands[0]}.",
-                                __name__,
-                            )
-                            text = ""
-                        else:
-                            known_ids.add(xform_id)
-                            try:
-                                text = self.extract_xform_text(
-                                    xform,
-                                    orientations,
-                                    space_width,
-                                    visitor_operand_before,
-                                    visitor_operand_after,
-                                    visitor_text,
-                                    known_ids=known_ids,
-                                )
-                            finally:
-                                known_ids.discard(xform_id)
+                    xform_text = self._extract_text__xform(
+                        resources_dict=resources_dict,
+                        operands=operands,
+                        orientations=orientations,
+                        space_width=space_width,
+                        visitor_operand_before=visitor_operand_before,
+                        visitor_operand_after=visitor_operand_after,
+                        visitor_text=visitor_text,
+                        known_ids=known_ids,
+                        traversal_state=traversal_state
+                    )
+                    if xform_text is not None:
+                        text = xform_text
                         extractor.output += text
                         if visitor_text is not None:
                             visitor_text(
@@ -1832,6 +1828,61 @@ class PageObject(DictionaryObject):
                 extractor.font_size,
             )
         return extractor.output
+
+    def _extract_text__xform(
+        self,
+        *,
+        resources_dict: DictionaryObject,
+        operands: Any,
+        orientations: Tuple[int, ...] = (0, 90, 180, 270),
+        space_width: float = 200.0,
+        visitor_operand_before: Optional[Callable[[Any, Any, Any, Any], None]] = None,
+        visitor_operand_after: Optional[Callable[[Any, Any, Any, Any], None]] = None,
+        visitor_text: Optional[Callable[[Any, Any, Any, Any, Any], None]] = None,
+        known_ids: Set[int],
+        traversal_state: _TraversalState
+    ) -> Optional[str]:
+        xobj = cast(DictionaryObject, resources_dict["/XObject"])
+        xform = cast(EncodedStreamObject, xobj[operands[0]])
+        if xform["/Subtype"] == NameObject("/Image"):
+            return None
+
+        xform_id = id(xform)
+        if xform_id in known_ids:
+            logger_warning(
+                f"Detected cyclic form XObject reference, skipping {operands[0]}.",
+                __name__,
+            )
+            return ""
+
+        if traversal_state.entry_count >= MAX_XFORM_INVOCATIONS_PER_EXTRACTION:
+            if not traversal_state.has_logged:
+                traversal_state.has_logged = True
+                logger_warning(
+                    (
+                        f"Exceeded {MAX_XFORM_INVOCATIONS_PER_EXTRACTION} form XObject invocations "
+                        "while extracting text; further form content is skipped."
+                    ),
+                    __name__,
+                )
+            return ""
+
+        traversal_state.entry_count += 1
+        known_ids.add(xform_id)
+        try:
+            text = self.extract_xform_text(
+                xform,
+                orientations,
+                space_width,
+                visitor_operand_before,
+                visitor_operand_after,
+                visitor_text,
+                known_ids=known_ids,
+                traversal_state=traversal_state,
+            )
+        finally:
+            known_ids.discard(xform_id)
+        return text
 
     def _layout_mode_fonts(self) -> Dict[str, _layout_mode.Font]:
         """
@@ -2083,6 +2134,7 @@ class PageObject(DictionaryObject):
         visitor_text: Optional[Callable[[Any, Any, Any, Any, Any], None]] = None,
         *,
         known_ids: Optional[Set[int]] = None,
+        traversal_state: Optional[Any] = None
     ) -> str:
         """
         Extract text from an XObject.
@@ -2094,11 +2146,15 @@ class PageObject(DictionaryObject):
             visitor_operand_before:
             visitor_operand_after:
             visitor_text:
+            known_ids:
+            traversal_state:
 
         Returns:
             The extracted text
 
         """
+        # The type hint would have to use an internal type otherwise, which is not desired.
+        assert traversal_state is None or isinstance(traversal_state, _TraversalState)
         return self._extract_text(
             xform,
             self.pdf,
@@ -2109,6 +2165,7 @@ class PageObject(DictionaryObject):
             visitor_operand_after,
             visitor_text,
             known_ids=known_ids,
+            traversal_state=traversal_state,
         )
 
     def _get_fonts(self) -> Tuple[Set[str], Set[str]]:
