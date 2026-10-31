@@ -704,3 +704,38 @@ def test_page__extract_text__xform__non_cyclic_reuse(caplog):
 
     assert page.extract_text().count("Hello") == 2
     assert not any("cyclic" in message for message in caplog.messages)
+
+
+@pytest.mark.timeout(5)
+def test_page_object__layout_mode_fonts__cyclic(caplog) -> None:
+    writer = PdfWriter()
+
+    font = DictionaryObject({
+        NameObject("/Type"): NameObject("/Font"),
+        NameObject("/Subtype"): NameObject("/Type1"),
+        NameObject("/BaseFont"): NameObject("/Helvetica"),
+    })
+    fonts = {"/F1": _layout_mode.Font(*build_char_map_from_dict(200.0, font), font)}
+    page = writer.add_blank_page(width=10, height=10)
+    # Font names are resolved against the /Resources of the page itself.
+    page[NameObject("/Resources")] = DictionaryObject({
+        NameObject("/Font"): DictionaryObject({
+            NameObject("/F1"): font
+        })
+    })
+    dictionary2 = DictionaryObject(DictionaryObject({
+        NameObject("/Resources"): DictionaryObject({
+            NameObject("/Font"): DictionaryObject({
+                NameObject("/F1"): font
+            })
+        })
+    }))
+    reference2 = writer._add_object(dictionary2)
+    dictionary3 = DictionaryObject({NameObject("/Parent"): reference2})
+    reference3 = writer._add_object(dictionary3)
+    page[NameObject("/Parent")] = reference3
+    dictionary2[NameObject("/Parent")] = page.indirect_reference
+    page.pdf = writer
+
+    assert page._layout_mode_fonts() == fonts
+    assert caplog.messages == ["Detected cycle in /Parent hierarchy when retrieving fonts."]
