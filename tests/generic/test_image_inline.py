@@ -5,7 +5,11 @@ import pytest
 
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
-from pypdf.generic._image_inline import is_followed_by_binary_data
+from pypdf.generic._image_inline import (
+    extract_inline_A85,
+    extract_inline_AHx,
+    is_followed_by_binary_data,
+)
 from tests import get_data_from_url
 
 
@@ -73,5 +77,25 @@ def test_extract_inline_dct__early_end_of_file():
     reader = PdfReader(BytesIO(get_data_from_url(url, name=name)))
     page = reader.pages[0]
 
-    with pytest.raises(expected_exception=PdfReadError, match=r"^Unexpected end of stream$"):
+    with pytest.raises(expected_exception=PdfReadError, match=r"^Unexpected end of stream\.$"):
         page.images[0].image.load()
+
+
+@pytest.mark.timeout(5)
+def test_extract_inline__ascii_hex_decode__early_end_of_file() -> None:
+    stream = BytesIO(b"ABCDE\nF G")
+
+    with pytest.raises(expected_exception=PdfReadError, match=r"^Unexpected end of stream\.$"):
+        extract_inline_AHx(stream)
+
+
+@pytest.mark.timeout(5)
+def test_extract_inline__ascii85_decode__early_end_of_file() -> None:
+    # Broken content stream, for example due to filter errors.
+    # Specific example:
+    #   Error -3 while decompressing data: invalid distance too far back
+    #   b'[...] \nBI\n/W 16 /H 16 /BPC 8 /CS /RGB /F [/A85 /Fl]\nID\nGar8O(o6*i%*56~\ne  L\ne  L9/ LL9/ L'
+    stream = BytesIO(b"Gar8O(o6*i%*56~\ne  L\ne  L9/ LL9/ L")
+
+    with pytest.raises(expected_exception=PdfReadError, match=r"^Unexpected end of stream\.$"):
+        extract_inline_A85(stream)

@@ -52,9 +52,9 @@ def extract_inline_AHx(stream: StreamType) -> bytes:
     data_out: bytes = b""
     # Read data until delimiter > and EI as backup.
     while True:
-        data_buffered = read_non_whitespace(stream) + stream.read(BUFFER_SIZE)
-        if not data_buffered:
-            raise PdfReadError("Unexpected end of stream")
+        data_buffered = read_non_whitespace(stream) + (read_bytes := stream.read(BUFFER_SIZE))
+        if not data_buffered or not read_bytes:
+            raise PdfReadError("Unexpected end of stream.")
         pos_tok = data_buffered.find(b">")
         if pos_tok >= 0:  # found >
             data_out += data_buffered[: pos_tok + 1]
@@ -72,7 +72,7 @@ def extract_inline_AHx(stream: StreamType) -> bytes:
             break
         if len(data_buffered) == 2:
             data_out += data_buffered
-            raise PdfReadError("Unexpected end of stream")
+            raise PdfReadError("Unexpected end of stream.")
         # Neither > nor EI found
         data_out += data_buffered[:-2]
         stream.seek(-2, 1)
@@ -81,7 +81,7 @@ def extract_inline_AHx(stream: StreamType) -> bytes:
     ei_tok += stream.read(2)
     stream.seek(-3, 1)
     if ei_tok[:2] != b"EI" or not (ei_tok[2:3] == b"" or ei_tok[2:3] in WHITESPACES):
-        raise PdfReadError("EI stream not found")
+        raise PdfReadError("EI stream not found.")
     return data_out
 
 
@@ -93,9 +93,9 @@ def extract_inline_A85(stream: StreamType) -> bytes:
     data_out: bytes = b""
     # Read data until delimiter ~>
     while True:
-        data_buffered = read_non_whitespace(stream) + stream.read(BUFFER_SIZE)
-        if not data_buffered:
-            raise PdfReadError("Unexpected end of stream")
+        data_buffered = read_non_whitespace(stream) + (read_bytes := stream.read(BUFFER_SIZE))
+        if not data_buffered or not read_bytes:
+            raise PdfReadError("Unexpected end of stream.")
         pos_tok = data_buffered.find(b"~>")
         if pos_tok >= 0:  # found!
             data_out += data_buffered[: pos_tok + 2]
@@ -103,7 +103,7 @@ def extract_inline_A85(stream: StreamType) -> bytes:
             break
         if len(data_buffered) == 2:  # end of buffer
             data_out += data_buffered
-            raise PdfReadError("Unexpected end of stream")
+            raise PdfReadError("Unexpected end of stream.")
         data_out += data_buffered[
             :-2
         ]  # back by one char in case of in the middle of ~>
@@ -113,7 +113,7 @@ def extract_inline_A85(stream: StreamType) -> bytes:
     ei_tok += stream.read(2)
     stream.seek(-3, 1)
     if ei_tok[:2] != b"EI" or not (ei_tok[2:3] == b"" or ei_tok[2:3] in WHITESPACES):
-        raise PdfReadError("EI stream not found")
+        raise PdfReadError("EI stream not found.")
     return data_out
 
 
@@ -127,7 +127,7 @@ def extract_inline_RL(stream: StreamType) -> bytes:
     while True:
         data_buffered = stream.read(BUFFER_SIZE)
         if not data_buffered:
-            raise PdfReadError("Unexpected end of stream")
+            raise PdfReadError("Unexpected end of stream.")
         pos_tok = data_buffered.find(b"\x80")
         if pos_tok >= 0:  # found
             data_out += data_buffered[: pos_tok + 1]
@@ -139,7 +139,7 @@ def extract_inline_RL(stream: StreamType) -> bytes:
     ei_tok += stream.read(2)
     stream.seek(-3, 1)
     if ei_tok[:2] != b"EI" or not (ei_tok[2:3] == b"" or ei_tok[2:3] in WHITESPACES):
-        raise PdfReadError("EI stream not found")
+        raise PdfReadError("EI stream not found.")
     return data_out
 
 
@@ -153,7 +153,7 @@ def extract_inline_DCT(stream: StreamType) -> bytes:
         # If the object is in non-blocking mode and no bytes are available, `None` is returned.
         _result = stream.read(length)
         if _result is None or len(_result) != length:
-            raise PdfReadError("Unexpected end of stream")
+            raise PdfReadError("Unexpected end of stream.")
         return _result
 
     data_out: bytes = b""
@@ -189,7 +189,7 @@ def extract_inline_DCT(stream: StreamType) -> bytes:
     ei_tok += stream.read(2)
     stream.seek(-3, 1)
     if ei_tok[:2] != b"EI" or not (ei_tok[2:3] == b"" or ei_tok[2:3] in WHITESPACES):
-        raise PdfReadError("EI stream not found")
+        raise PdfReadError("EI stream not found.")
     return data_out
 
 
@@ -200,7 +200,7 @@ def extract_inline_default(stream: StreamType) -> bytes:
     while True:
         data_buffered = stream.read(BUFFER_SIZE)
         if not data_buffered:
-            raise PdfReadError("Unexpected end of stream")
+            raise PdfReadError("Unexpected end of stream.")
         pos_ei = data_buffered.find(
             b"E"
         )  # We can not look straight for "EI" because it may not have been loaded in the buffer
