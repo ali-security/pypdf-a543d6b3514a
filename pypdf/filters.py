@@ -83,6 +83,8 @@ RUN_LENGTH_MAX_OUTPUT_LENGTH = 75_000_000
 FLATE_MAX_COLUMNS = 250_000
 FLATE_MAX_ROW_LENGTH = 4_000_000
 FLATE_MAX_BUFFER_SIZE = 75_000_000  # TODO: This should be IMAGE_MAX_BUFFER_SIZE.
+STREAM_FILTERS_MAX_LENGTH = 16  # The maximum allowed number of filters per stream.
+STREAM_DECODING_WORK_MAX_LENGTH = 300_000_000  # The maximum allowed accumulated decoding work in bytes per stream.
 
 # Reuse cached 1-byte values in the fallback loop to avoid per-byte allocations.
 _SINGLE_BYTES = tuple(bytes((i,)) for i in range(256))
@@ -811,6 +813,11 @@ def decode_stream_data(stream: Any) -> bytes:
     if not isinstance(filters, ArrayObject):
         # We have a single filter instance
         filters = (filters,)
+    if (filter_count := len(filters)) > STREAM_FILTERS_MAX_LENGTH:
+        raise LimitReachedError(
+            f"Maximum filter count {STREAM_FILTERS_MAX_LENGTH} exceeded: {filter_count}"
+        )
+
     decode_parms = stream.get(SA.DECODE_PARMS, ({},) * len(filters))
     if not isinstance(decode_parms, (list, tuple)):
         decode_parms = (decode_parms,)
@@ -818,7 +825,22 @@ def decode_stream_data(stream: Any) -> bytes:
     # If there is no data to decode, we should not try to decode it.
     if not data:
         return data
+
+    accumulated_decoding_work = 0
+    decoding_work_maximum_length = STREAM_DECODING_WORK_MAX_LENGTH
+
+    def _check_decoding_work(amount: int) -> None:
+        nonlocal accumulated_decoding_work
+        accumulated_decoding_work += amount
+        if accumulated_decoding_work > decoding_work_maximum_length:
+            raise LimitReachedError(
+                "Stream decoding exceeded the maximum accumulated "
+                f"decoding work of {decoding_work_maximum_length} bytes."
+            )
+
     for filter_name, params in zip(filters, decode_parms):
+        _check_decoding_work(amount=len(data))
+
         if isinstance(params, NullObject):
             params = {}
         if filter_name in (FT.ASCII_HEX_DECODE, FTA.AHx):
@@ -847,6 +869,9 @@ def decode_stream_data(stream: Any) -> bytes:
                 )
         else:
             raise NotImplementedError(f"Unsupported filter {filter_name}")
+
+        _check_decoding_work(amount=len(data))
+
     return data
 
 
