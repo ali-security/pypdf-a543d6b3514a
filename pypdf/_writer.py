@@ -3307,11 +3307,15 @@ class PdfWriter(PdfDocCommon):
         self,
         outline_item: Dict[str, Any],
         root: Optional[OutlineType] = None,
+        *,
+        visited: Optional[Set[int]] = None,
     ) -> Optional[List[int]]:
         if root is None:
             o = self.get_outline_root()
         else:
             o = cast("TreeObject", root)
+        if visited is None:
+            visited = set()
 
         i = 0
         while o is not None:
@@ -3320,9 +3324,15 @@ class PdfWriter(PdfDocCommon):
                 or o.get("/Title", None) == outline_item
             ):
                 return [i]
+
+            o_id = id(o)
+            if o_id in visited:
+                raise LimitReachedError("Detected cyclic outline hierarchy.")
+            visited.add(o_id)
+
             if "/First" in o:
                 res = self.find_outline_item(
-                    outline_item, cast(OutlineType, o["/First"])
+                    outline_item, cast(OutlineType, o["/First"]), visited=visited
                 )
                 if res:
                     return ([i] if "/Title" in o else []) + res

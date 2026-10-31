@@ -889,11 +889,16 @@ class TreeObject(DictionaryObject):
         cur: Optional[Dict[str, Any]] = cur_ref.get_object()  # type: ignore
         last_ref = self[NameObject("/Last")]
         last = last_ref.get_object()
+        visited: Set[int] = set()
         while cur is not None:
             if cur == child_obj:
                 self._remove_node_from_tree(prev, prev_ref, cur, last)
                 found = True
                 break
+            cur_id = id(cur)
+            if cur_id in visited:
+                raise LimitReachedError("Detected cyclic /Next hierarchy.")
+            visited.add(cur_id)
 
             # Go to the next node
             prev_ref = cur_ref

@@ -37,6 +37,7 @@ from pypdf.generic import (
     RectangleObject,
     StreamObject,
     TextStringObject,
+    TreeObject,
 )
 
 from . import get_data_from_url, is_sublist
@@ -3141,3 +3142,32 @@ def test_generate_appearance_stream__returns_bytes() -> None:
     assert ap_stream.endswith(b"(b) Tj\nET\nQ\nEMC\nQ\n")
     assert ap_stream.count(b"0.5 0.5 0.5 rg s\n") == 1
     assert b"(a) Tj\n" in ap_stream
+
+
+@pytest.mark.parametrize("name", ["/Next", "/First"])
+def test_find_outline_item__cyclic(name: str) -> None:
+    writer = PdfWriter()
+    writer.add_blank_page(width=10, height=10)
+
+    entry1 = DictionaryObject()
+    reference1 = writer._add_object(entry1)
+    entry2 = DictionaryObject({
+        NameObject(name): reference1
+    })
+    reference2 = writer._add_object(entry2)
+    entry3 = DictionaryObject({
+        NameObject(name): reference2
+    })
+    reference3 = writer._add_object(entry3)
+    entry1[NameObject(name)] = reference3
+
+    outlines = TreeObject(
+        DictionaryObject({
+            NameObject(name): reference3,
+            NameObject("/Last"): NullObject(),
+        })
+    )
+    writer.root_object[NameObject("/Outlines")] = writer._add_object(outlines)
+
+    with pytest.raises(expected_exception=LimitReachedError, match=r"^Detected cyclic outline hierarchy\.$"):
+        writer.find_outline_item("Dummy")

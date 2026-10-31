@@ -1672,3 +1672,34 @@ def test_tree_object__insert_child__cycle() -> None:
             before=None,
             pdf=writer,
         )
+
+
+def test_tree_object__remove_child__cyclic() -> None:
+    writer = PdfWriter()
+    writer.add_blank_page(width=10, height=10)
+
+    entry1 = DictionaryObject()
+    reference1 = writer._add_object(entry1)
+    entry2 = DictionaryObject({
+        NameObject("/Next"): reference1
+    })
+    reference2 = writer._add_object(entry2)
+    entry3 = DictionaryObject({
+        NameObject("/Next"): reference2
+    })
+    reference3 = writer._add_object(entry3)
+    entry1[NameObject("/Next")] = reference3
+
+    tree = TreeObject(
+        DictionaryObject({
+            NameObject("/First"): reference3,
+            NameObject("/Last"): NullObject(),
+        })
+    )
+    child = DictionaryObject({
+        NameObject("/Parent"): writer._add_object(tree)
+    })
+    writer._add_object(child)
+
+    with pytest.raises(expected_exception=LimitReachedError, match=r"^Detected cyclic /Next hierarchy\.$"):
+        tree.remove_child(child)
