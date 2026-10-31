@@ -5,7 +5,7 @@ import sys
 import time
 from io import BytesIO
 from pathlib import Path
-from typing import List, Union
+from typing import List, Optional, Union
 from unittest import mock
 
 import pytest
@@ -2439,3 +2439,83 @@ def test_get_object__repeated_page_references_to_same_missing_object(caplog) -> 
     # The missing object is only searched for once, all further lookups are served by the cache.
     assert caplog.text.count("Object 99 0 not defined.") == 1
     assert "Overwriting cache" not in caplog.text
+
+
+def _generate_pdf15_xref_stream_pdf_file(
+        size: int, encoded: bytes, index: Optional[str] = None, prev: bool = False
+) -> bytes:
+    pdf = bytearray(b"%PDF-1.7\n")
+    pdf += b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+    pdf += b"2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n"
+
+    prev_offset = len(pdf) if prev else None
+    if prev:
+        pdf += (
+            f"3 0 obj\n<< /Type /XRef /Size 12 /Index [10 2] /W [1 0 0] /Root 1 0 R /Filter /FlateDecode "
+            f"/Length {len(encoded)} >>\nstream\n"
+        ).encode()
+        pdf += encoded + b"\nendstream\nendobj\n"
+
+    startxref = len(pdf)
+    index_entry = f"/Index {index} " if index is not None else ""
+    prev_entry = f"/Prev {prev_offset} " if prev_offset is not None else ""
+
+    pdf += (
+        f"3 0 obj\n<< /Type /XRef /Size {size} {index_entry}/W [1 0 0] /Root 1 0 R "
+        f"{prev_entry}/Filter /FlateDecode /Length {len(encoded)} >>\nstream\n"
+    ).encode()
+    pdf += encoded + b"\nendstream\nendobj\n"
+    pdf += f"startxref\n{startxref}\n%%EOF\n".encode()
+    return pdf
+
+
+@pytest.mark.timeout(10)
+@pytest.mark.parametrize("strict", ["True", "False"])
+def test_read_pdf15_xref_stream__entry_limit(strict: bool, caplog):
+    encoded = FlateDecode.encode(b"\x02" * 10)
+    pdf = _generate_pdf15_xref_stream_pdf_file(size=10, encoded=encoded)
+
+    with pytest.raises(
+            PdfReadError,
+            match=r"^Trailer cannot be read: Maximum XRef stream entry limit reached: 10 > 3\.$"
+    ):
+        _ = PdfReader(BytesIO(pdf), strict=strict, xref_stream_maximum_entries=3)
+    assert caplog.messages == []
+
+
+@pytest.mark.timeout(10)
+def test_read_pdf15_xref_stream__entry_limit__default(caplog):
+    # Highly compressible stream declaring more entries than the default limit allows.
+    encoded = FlateDecode.encode(b"\x02" * 2_000_001)
+    pdf = _generate_pdf15_xref_stream_pdf_file(size=2_000_001, encoded=encoded)
+
+    with pytest.raises(
+            PdfReadError,
+            match=r"^Trailer cannot be read: Maximum XRef stream entry limit reached: 2000001 > 2000000\.$"
+    ):
+        _ = PdfReader(BytesIO(pdf))
+    assert caplog.messages == []
+
+
+@pytest.mark.timeout(10)
+def test_read_pdf15_xref_stream__entry_limit__prev(caplog):
+    encoded = FlateDecode.encode(b"\x02\x02")
+    pdf = _generate_pdf15_xref_stream_pdf_file(size=22, encoded=encoded, index="[20 2]", prev=True)
+    reader = PdfReader(BytesIO(pdf), xref_stream_maximum_entries=3)
+
+    assert list(reader.xref_objStm) == [20, 21]
+    assert "Previous trailer cannot be read: ('Maximum XRef stream entry limit reached: 4 > 3.',)" in caplog.messages
+
+
+@pytest.mark.timeout(10)
+def test_read_pdf15_xref_stream__negative_count(caplog):
+    encoded = FlateDecode.encode(b"\x02" * 2)
+    pdf = _generate_pdf15_xref_stream_pdf_file(size=12, encoded=encoded, index="[0 -5 10 2]")
+
+    with pytest.raises(PdfReadError, match=r"^Trailer cannot be read: Negative XRef count -5\.$"):
+        _ = PdfReader(BytesIO(pdf), strict=True)
+    assert caplog.messages == []
+
+    reader = PdfReader(BytesIO(pdf), strict=False)
+    assert list(reader.xref_objStm) == [10, 11]
+    assert caplog.messages == ["Negative XRef count -5, using 0."]
