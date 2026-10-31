@@ -1,4 +1,5 @@
 import codecs
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Union
 
 from .._codecs import _pdfdoc_encoding
@@ -216,3 +217,14 @@ def decode_pdfdocencoding(byte_array: bytes) -> str:
             )
         retval += c
     return retval
+
+
+@dataclass
+class StreamParsingBudget:
+    """
+    Shared, mutable budget for limiting parsing work.
+
+    Pass the same instance to recursive parsing calls to enforce a
+    cumulative budget across nested arrays and dictionaries.
+    """
+    remaining_budget: int

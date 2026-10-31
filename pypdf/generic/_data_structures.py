@@ -91,7 +91,7 @@ from ._image_inline import (
     extract_inline_default,
     extract_inline_RL,
 )
-from ._utils import read_hex_string_from_stream, read_string_from_stream
+from ._utils import StreamParsingBudget, read_hex_string_from_stream, read_string_from_stream
 
 if sys.version_info >= (3, 11):
     from typing import Self
@@ -100,6 +100,16 @@ else:
 
 logger = logging.getLogger(__name__)
 IndirectPattern = re.compile(rb"[+-]?(\d+)\s+(\d+)\s+R[^a-zA-Z]")
+
+ARRAY_MAX_ELEMENT_COUNT = 100_000
+"""The maximum allowed number of elements inside an array."""
+DICTIONARY_MAX_ELEMENT_COUNT = 100_000
+"""The maximum allowed number of key-value pairs inside a dictionary."""
+STREAM_PARSING_WORK_MAX_COUNT = 2_000_000
+"""
+The maximum parsing budget for a content stream, including operands, operators, and elements in
+nested arrays and dictionaries.
+"""
 
 
 class ArrayObject(List[Any], PdfObject):
@@ -237,15 +247,29 @@ class ArrayObject(List[Any], PdfObject):
         stream.write(b" ]")
 
     @staticmethod
+    def _check_limits(*, remaining_elements: int, parsing_budget: Optional[StreamParsingBudget]) -> int:
+        remaining_elements -= 1
+        if remaining_elements < 0:
+            raise LimitReachedError("Reached maximum array element count.")
+        if parsing_budget is not None:
+            parsing_budget.remaining_budget -= 1
+            if parsing_budget.remaining_budget < 0:
+                raise LimitReachedError("Reached maximum number of tokens.")
+        return remaining_elements
+
+    @staticmethod
     def read_from_stream(
         stream: StreamType,
         pdf: Optional[PdfReaderProtocol],
         forced_encoding: Union[None, str, List[str], Dict[int, str]] = None,
+        *,
+        parsing_budget: Optional[StreamParsingBudget] = None,
     ) -> "ArrayObject":
         arr = ArrayObject()
         tmp = stream.read(1)
         if tmp != b"[":
             raise PdfReadError("Could not read array")
+        remaining_elements = ARRAY_MAX_ELEMENT_COUNT
         while True:
             # skip leading whitespace
             tok = stream.read(1)
@@ -262,9 +286,13 @@ class ArrayObject(List[Any], PdfObject):
             peek_ahead = stream.read(1)
             if peek_ahead == b"]":
                 break
+
+            remaining_elements = ArrayObject._check_limits(
+                remaining_elements=remaining_elements, parsing_budget=parsing_budget
+            )
             stream.seek(-1, 1)
             # read and append object
-            arr.append(read_object(stream, pdf, forced_encoding))
+            arr.append(read_object(stream, pdf, forced_encoding, parsing_budget=parsing_budget))
         return arr
 
 
@@ -566,6 +594,8 @@ class DictionaryObject(Dict[Any, Any], PdfObject):
         stream: StreamType,
         pdf: Optional[PdfReaderProtocol],
         forced_encoding: Union[None, str, List[str], Dict[int, str]] = None,
+        *,
+        parsing_budget: Optional[StreamParsingBudget] = None,
     ) -> "DictionaryObject":
         tmp = stream.read(2)
         if tmp != b"<<":
@@ -574,6 +604,7 @@ class DictionaryObject(Dict[Any, Any], PdfObject):
                 "stream must begin with '<<'"
             )
         data: Dict[Any, Any] = {}
+        remaining_count = DICTIONARY_MAX_ELEMENT_COUNT
         while True:
             tok = read_non_whitespace(stream)
             if tok == b"\x00":
@@ -589,9 +620,18 @@ class DictionaryObject(Dict[Any, Any], PdfObject):
                 stream.read(1)
                 break
             stream.seek(-1, 1)
+
+            remaining_count -= 1
+            if remaining_count < 0:
+                raise LimitReachedError("Reached maximum number of dictionary entries.")
+            if parsing_budget is not None:
+                parsing_budget.remaining_budget -= 2
+                if parsing_budget.remaining_budget < 0:
+                    raise LimitReachedError("Reached maximum number of tokens.")
+
             try:
                 try:
-                    key = read_object(stream, pdf)
+                    key = read_object(stream, pdf, parsing_budget=parsing_budget)
                     if isinstance(key, NullObject):
                         break
                     if not isinstance(key, NameObject):
@@ -605,8 +645,11 @@ class DictionaryObject(Dict[Any, Any], PdfObject):
                     continue
                 tok = read_non_whitespace(stream)
                 stream.seek(-1, 1)
-                value = read_object(stream, pdf, forced_encoding)
-            except (RecursionError, LimitReachedError) as exc:
+                value = read_object(stream, pdf, forced_encoding, parsing_budget=parsing_budget)
+            except LimitReachedError:
+                # Always propagate security issues.
+                raise
+            except RecursionError as exc:
                 raise PdfReadError(exc.__repr__())
             except Exception as exc:
                 if pdf is not None and pdf.strict:
@@ -1345,10 +1388,27 @@ class ContentStream(DecodedStreamObject):
         # no need to call DictionaryObjection or anything
         # like super(DictionaryObject,self)._clone(src, pdf_dest, force_duplicate, ignore_fields, visited)
 
+    @staticmethod
+    def _check_limits(
+            *,
+            remaining_elements: Optional[int] = None,
+            parsing_budget: StreamParsingBudget,
+            token_decrement: int
+    ) -> Optional[int]:
+        if remaining_elements is not None:
+            remaining_elements -= 1
+            if remaining_elements < 0:
+                raise LimitReachedError("Reached maximum number of tokens.")
+        parsing_budget.remaining_budget -= token_decrement
+        if parsing_budget.remaining_budget < 0:
+            raise LimitReachedError("Reached maximum number of tokens per stream.")
+        return remaining_elements
+
     def _parse_content_stream(self, stream: StreamType) -> None:
         # 7.8.2 Content Streams
         stream.seek(0, 0)
         operands: List[Union[int, str, PdfObject]] = []
+        parsing_budget = StreamParsingBudget(remaining_budget=STREAM_PARSING_WORK_MAX_COUNT)
         while True:
             peek = read_non_whitespace(stream)
             if peek in (b"", 0):
@@ -1362,9 +1422,11 @@ class ContentStream(DecodedStreamObject):
                     # begin inline image - a completely different parsing
                     # mechanism is required, of course... thanks buddy...
                     assert operands == []
-                    ii = self._read_inline_image(stream)
+                    self._check_limits(parsing_budget=parsing_budget, token_decrement=2)
+                    ii = self._read_inline_image(stream, parsing_budget=parsing_budget)
                     self._operations.append((ii, b"INLINE IMAGE"))
                 else:
+                    self._check_limits(parsing_budget=parsing_budget, token_decrement=1)
                     self._operations.append((operands, operator))
                     operands = []
             elif peek == b"%":
@@ -1376,12 +1438,18 @@ class ContentStream(DecodedStreamObject):
                 while peek not in (b"\r", b"\n", b""):
                     peek = stream.read(1)
             else:
-                operands.append(read_object(stream, None, self.forced_encoding))
+                self._check_limits(parsing_budget=parsing_budget, token_decrement=1)
+                operands.append(read_object(stream, None, self.forced_encoding, parsing_budget=parsing_budget))
 
-    def _read_inline_image(self, stream: StreamType) -> Dict[str, Any]:
+    def _read_inline_image(
+            self, stream: StreamType, parsing_budget: Optional[StreamParsingBudget] = None
+    ) -> Dict[str, Any]:
         # begin reading just after the "BI" - begin image
         # first read the dictionary of settings.
+        if parsing_budget is None:
+            parsing_budget = StreamParsingBudget(remaining_budget=STREAM_PARSING_WORK_MAX_COUNT)
         settings = DictionaryObject()
+        remaining_count: Optional[int] = DICTIONARY_MAX_ELEMENT_COUNT
         while True:
             tok = read_non_whitespace(stream)
             if not tok:
@@ -1390,10 +1458,14 @@ class ContentStream(DecodedStreamObject):
             if tok == b"I":
                 # "ID" - begin of image data
                 break
-            key = read_object(stream, self.pdf)
-            tok = read_non_whitespace(stream)
+            remaining_count = self._check_limits(
+                remaining_elements=remaining_count, parsing_budget=parsing_budget, token_decrement=2
+            )
+
+            key = read_object(stream, self.pdf, parsing_budget=parsing_budget)
+            _ = read_non_whitespace(stream)
             stream.seek(-1, 1)
-            value = read_object(stream, self.pdf)
+            value = read_object(stream, self.pdf, parsing_budget=parsing_budget)
             settings[key] = value
         # left at beginning of ID
         tmp = stream.read(3)
@@ -1514,7 +1586,22 @@ def read_object(
     stream: StreamType,
     pdf: Optional[PdfReaderProtocol],
     forced_encoding: Union[None, str, List[str], Dict[int, str]] = None,
+    *,
+    parsing_budget: Optional[StreamParsingBudget] = None,
 ) -> Union[PdfObject, int, str, ContentStream]:
+    """
+    Read the next object from the stream.
+
+    Args:
+        stream: The stream to read from.
+        pdf: The corresponding PDF file.
+        forced_encoding: The encoding to enforce, if any.
+        parsing_budget: The allowed parsing budget, optional. If set, only applies to dictionaries,
+            arrays and content streams.
+
+    Returns:
+        The parsed object.
+    """
     tok = stream.read(1)
     stream.seek(-1, 1)  # reset to start
     if tok == b"/":
@@ -1524,10 +1611,10 @@ def read_object(
         peek = stream.read(2)
         stream.seek(-2, 1)  # reset to start
         if peek == b"<<":
-            return DictionaryObject.read_from_stream(stream, pdf, forced_encoding)
+            return DictionaryObject.read_from_stream(stream, pdf, forced_encoding, parsing_budget=parsing_budget)
         return read_hex_string_from_stream(stream, forced_encoding)
     if tok == b"[":
-        return ArrayObject.read_from_stream(stream, pdf, forced_encoding)
+        return ArrayObject.read_from_stream(stream, pdf, forced_encoding, parsing_budget=parsing_budget)
     if tok in (b"t", b"f"):
         return BooleanObject.read_from_stream(stream)
     if tok == b"(":
@@ -1541,7 +1628,7 @@ def read_object(
         skip_over_comment(stream)
         tok = read_non_whitespace(stream)
         stream.seek(-1, 1)
-        return read_object(stream, pdf, forced_encoding)
+        return read_object(stream, pdf, forced_encoding, parsing_budget=parsing_budget)
     if tok in b"0123456789+-.":
         # number object OR indirect reference
         peek = stream.read(20)
