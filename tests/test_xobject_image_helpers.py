@@ -188,3 +188,19 @@ def test_xobj_to_image__flate_image_size_limit() -> None:
             match=r"^Requested buffer size 76500000 exceeds limit of 75000000\.$"
     ):
         _xobj_to_image(image)
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        ("1", "8000000000"),
+        ("RGB", "24000000000"),
+        ("CMYK", "32000000000"),
+    ],
+)
+def test_extended_image_frombytes__limit(mode: str, expected: str) -> None:
+    with pytest.raises(
+            expected_exception=LimitReachedError,
+            match=rf"^Requested image buffer size {expected} exceeds limit 75000000\.$"
+    ):
+        _ = _extended_image_frombytes(mode=mode, size=(100_000, 80_000), data=b"")
